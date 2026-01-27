@@ -27,16 +27,16 @@ use std::{
     str::{FromStr, from_utf8},
     thread::JoinHandle,
 };
-use tokio::{io::AsyncReadExt, sync::Mutex};
+use tokio::{ sync::Mutex};
 
-mod messages;
 mod screens;
-use screens::signin::SignInScreen;
 use url::Url;
+mod app;
+mod ui_error;
+mod services;
 
-use crate::{messages::Message, screens::Screen};
+use crate::app::{message::{Message, ScreenMessage}, state::{AppState, OrgState, Screen, SessionState}};
 
-const HTML_SUCCESSFUL_SIGN_IN: &[u8] = include_bytes!("../sign-in-complete.html");
 
 fn main() -> iced::Result {
     env_logger::Builder::from_default_env()
@@ -45,26 +45,36 @@ fn main() -> iced::Result {
 
     dotenvy::dotenv().map_err(|e| iced::Error::WindowCreationFailed(e.into()))?;
 
-    let iced_result = iced::application(
+    iced::application(
         ArchiveClient::default,
         ArchiveClient::update,
         ArchiveClient::view,
     )
     .centered()
-    .run();
-
-    iced_result
+    .run()
 }
 
 struct ArchiveClient {
-    screen: screens::Screen,
+    app: AppState
 }
 
 impl Default for ArchiveClient {
     fn default() -> Self {
         println!("Starting Archive Client...");
+        let app_state = AppState {
+            screen: app::state::Screen::SignIn(screens::signin::SignInScreen::default()),
+            session: SessionState{
+                user: None,
+                role: None,
+                auth: app::state::AuthState::SignedOut,
+            },
+            org: OrgState {
+                config: None,
+                status: app::state::OrgStatus::Unknown,
+            },
+        };
         Self {
-            screen: Screen::SignIn(SignInScreen::new()),
+            app: app_state
         }
     }
 }
@@ -108,7 +118,7 @@ async fn oauth2_redirect_uri_handler(
                 .await
                 .unwrap();
 
-            return Ok(response)
+            return Ok(response);
         }
     }
 
@@ -130,7 +140,7 @@ impl ArchiveClient {
 
         let (stream, _) = listener.accept().await.unwrap();
         let io = TokioIo::new(stream);
-        let service = service_fn(move |req|{
+        let service = service_fn(move |req| {
             let sender = tx.clone();
             async move {
                 let access_token = oauth2_redirect_uri_handler(req).await.unwrap();
@@ -138,11 +148,13 @@ impl ArchiveClient {
                     sender.send(access_token).unwrap();
                 }
 
-                Ok::<Response<Full<Bytes>>, Infallible>(Response::builder()
-                    .status(StatusCode::OK)
-                    .header("content-type", "text/html")
-                    .body(Full::new(Bytes::from_static(HTML_SUCCESSFUL_SIGN_IN)))
-                    .unwrap())
+                Ok::<Response<Full<Bytes>>, Infallible>(
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "text/html")
+                        .body(Full::new(Bytes::from_static(HTML_SUCCESSFUL_SIGN_IN)))
+                        .unwrap(),
+                )
             }
         });
 
@@ -171,38 +183,36 @@ impl ArchiveClient {
     fn update(&mut self, message: Message) -> Task<Message> {
         println!("Received message: {:?}", message);
         match message {
-            Message::SignInPressed => {
-                self.screen = Screen::SignIn(SignInScreen::new());
-
-                Task::perform(
-                    async {
-                        ArchiveClient::open_browser();
-                        ArchiveClient::start_local_server_for_single_request().await
-                    },
-                    |c| Message::SignInFinished(c),
-                )
-            }
-            Message::SignInFinished(c) => {
-                println!("SignInFinished");
-                Task::none()
-            }
+            Message::Screen(ScreenMessage::Login(msg @ screens::signin::Message::SignInClicked)) =>
+                if let Screen::SignIn(screen) = &mut self.app.screen {
+                    screen.update(msg.clone());
+                    Task::perform(async {
+                    ArchiveClient::open_browser();
+                    ArchiveClient::start_local_server_for_single_request().await
+                }, |c| Message::Auth(app::message::AuthMessage::AccessTokenReceived(Ok(c.access_token))))
+                }else {
+                    Task::none()
+                }
+            ,
+            _ => Task::none()
         }
     }
 
     // update the UI
     fn view(&self) -> Element<'_, Message> {
         println!("Rendering view for screen");
-        let contents = match &self.screen {
-            Screen::SignIn(sign_in_screen) => sign_in_screen.view(),
+
+        let contents = match &self.app.screen {
+            app::state::Screen::SignIn(screen) => {
+                println!("{:?}", screen);
+                screen.view()
+                .map(|m| Message::Screen(m.into()))
+            },
+            app::state::Screen::GetOrCreateOrganisation => todo!(),
+            app::state::Screen::ListFiles => todo!(),
+            app::state::Screen::Syncing => todo!(),
         };
 
         contents.into()
     }
-}
-
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn test_url_parsing() {}
 }
