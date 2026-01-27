@@ -139,6 +139,7 @@ dependencies = [
 name = "archive-client-rs"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "dotenvy",
  "env_logger",
  "http-body-util",

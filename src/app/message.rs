@@ -1,5 +1,6 @@
 use crate::{
     screens,
+    services::auth::AccessTokenResponse,
     ui_error::{UiError, UiErrorKind},
 };
 
@@ -16,8 +17,7 @@ pub enum ScreenMessage {
 
 #[derive(Clone, Debug)]
 pub enum AuthMessage {
-    AuthorizationCodeReceived(Result<String, AuthError>),
-    AccessTokenReceived(Result<String, AuthError>),
+    AccessTokenReceived(Result<AccessTokenResponse, AuthError>),
     TokenRefreshed(Result<String, AuthError>),
     SignedOut,
 }

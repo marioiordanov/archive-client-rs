@@ -17,7 +17,6 @@ use iced::{
 };
 use log::info;
 use serde::{Deserialize, de::DeserializeOwned};
-use std::net::TcpListener;
 use std::thread;
 use std::{
     collections::HashMap,
@@ -26,6 +25,10 @@ use std::{
     net::{SocketAddr, TcpStream},
     str::{FromStr, from_utf8},
     thread::JoinHandle,
+};
+use std::{
+    net::TcpListener,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
 
@@ -38,9 +41,9 @@ mod ui_error;
 use crate::{
     app::{
         message::{Message, ScreenMessage},
-        state::{AppState, OrgState, Screen, SessionState},
+        state::{AppState, OrgState, Screen, SessionState, UserProfile},
     },
-    services::auth::AuthService,
+    services::auth::{self, AuthService},
 };
 
 fn main() -> iced::Result {
@@ -83,28 +86,6 @@ impl Default for ArchiveClient {
 }
 
 impl ArchiveClient {
-    // changes the state
-    fn update(&mut self, message: Message) -> Task<Message> {
-        println!("Received message: {:?}", message);
-        match message {
-            Message::Screen(ScreenMessage::Login(
-                msg @ screens::signin::Message::SignInClicked,
-            )) => {
-                if let Screen::SignIn(screen) = &mut self.app.screen {
-                    screen.update(msg.clone());
-                    Task::perform(AuthService {}.get_drive_access_token(), |c| {
-                        Message::Auth(app::message::AuthMessage::AccessTokenReceived(Ok(
-                            c.access_token
-                        )))
-                    })
-                } else {
-                    Task::none()
-                }
-            }
-            _ => Task::none(),
-        }
-    }
-
     // update the UI
     fn view(&self) -> Element<'_, Message> {
         println!("Rendering view for screen");

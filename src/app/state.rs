@@ -30,11 +30,12 @@ pub enum AuthState {
 }
 
 pub struct UserProfile {
-    email: String,
-    access_token: String,
-    scopes: Vec<String>,
-    refresh_token: String,
-    expires_at: u32,
+    pub email: String,
+    pub access_token: String,
+    pub scopes: Vec<String>,
+    pub refresh_token: String,
+    pub expires_at: u64,
+    pub token_type: String,
 }
 
 pub struct OrgState {
