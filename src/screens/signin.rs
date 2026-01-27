@@ -8,7 +8,7 @@ use crate::ui_error::UiError;
 #[derive(Default, Debug)]
 pub(crate) struct SignInScreen {
     busy: bool,
-    error: Option<UiError>
+    error: Option<UiError>,
 }
 
 impl SignInScreen {
@@ -20,8 +20,14 @@ impl SignInScreen {
 
     pub fn update(&mut self, msg: Message) {
         match msg {
-            Message::SignInClicked => { self.error = None; self.busy = true;}
-            Message::ClearError => { self.error = None; self.busy = false;}
+            Message::SignInClicked => {
+                self.error = None;
+                self.busy = true;
+            }
+            Message::ClearError => {
+                self.error = None;
+                self.busy = false;
+            }
         }
     }
 }
@@ -29,7 +35,7 @@ impl SignInScreen {
 #[derive(Clone, Debug)]
 pub enum Message {
     SignInClicked,
-    ClearError
+    ClearError,
 }
 
 impl Into<ScreenMessage> for Message {

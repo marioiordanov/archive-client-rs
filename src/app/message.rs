@@ -1,4 +1,7 @@
-use crate::{screens, ui_error::{UiError, UiErrorKind}};
+use crate::{
+    screens,
+    ui_error::{UiError, UiErrorKind},
+};
 
 #[derive(Clone, Debug)]
 pub enum Message {
@@ -8,7 +11,7 @@ pub enum Message {
 
 #[derive(Clone, Debug)]
 pub enum ScreenMessage {
-    Login(screens::signin::Message)
+    Login(screens::signin::Message),
 }
 
 #[derive(Clone, Debug)]
@@ -37,7 +40,7 @@ impl From<AuthError> for UiError {
             AuthError::TokenExpired => UiError {
                 title: "Session expired".into(),
                 detail: Some("Please sign in again.".into()),
-                kind: UiErrorKind::Warning
+                kind: UiErrorKind::Warning,
             },
             AuthError::PermissionDenied => UiError {
                 title: "Permission required".into(),

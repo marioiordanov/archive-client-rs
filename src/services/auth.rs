@@ -7,64 +7,62 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 use url::Url;
 
-
 const HTML_SUCCESSFUL_SIGN_IN: &[u8] = include_bytes!("../../sign-in-complete.html");
 
-struct AuthService {
-
-}
+pub struct AuthService {}
 
 #[derive(Deserialize, Debug, Clone)]
-struct AccessTokenResponse {
-    access_token: String,
-    expires_in: u16,
-    token_type: String,
-    scope: String,
-    id_token: Option<String>,
-    refresh_token: String,
-    refresh_token_expires_in: Option<u16>,
+pub struct AccessTokenResponse {
+    pub access_token: String,
+    pub expires_in: u16,
+    pub token_type: String,
+    pub scope: String,
+    pub id_token: Option<String>,
+    pub refresh_token: String,
+    pub refresh_token_expires_in: Option<u16>,
 }
 
 impl AuthService {
-    pub async fn get_drive_access_token(&self) -> AccessTokenResponse{
+    pub async fn get_drive_access_token(&self) -> AccessTokenResponse {
         self.open_browser();
         self.start_local_server_for_single_request().await
     }
 
-    async fn oauth2_redirect_uri_handler(&self,
-    req: Request<hyper::body::Incoming>,
-) -> Result<AccessTokenResponse, String> {
-    if let Some(query) = req.uri().query() {
-        let params: HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes())
-            .into_owned()
-            .collect();
+    async fn oauth2_redirect_uri_handler(
+        &self,
+        req: Request<hyper::body::Incoming>,
+    ) -> Result<AccessTokenResponse, String> {
+        if let Some(query) = req.uri().query() {
+            let params: HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes())
+                .into_owned()
+                .collect();
 
-        if let Some(code) = params.get("code") {
-            let body = url::form_urlencoded::Serializer::new(String::new())
-                .append_pair("code", &code)
-                .append_pair("client_id", &dotenvy::var("CLIENT_ID").unwrap())
-                .append_pair("redirect_uri", &dotenvy::var("REDIRECT_URI").unwrap())
-                .append_pair("grant_type", "authorization_code")
-                .append_pair("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
-                .finish();
+            if let Some(code) = params.get("code") {
+                let body = url::form_urlencoded::Serializer::new(String::new())
+                    .append_pair("code", &code)
+                    .append_pair("client_id", &dotenvy::var("CLIENT_ID").unwrap())
+                    .append_pair("redirect_uri", &dotenvy::var("REDIRECT_URI").unwrap())
+                    .append_pair("grant_type", "authorization_code")
+                    .append_pair("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
+                    .finish();
 
-            let response: AccessTokenResponse = reqwest::Client::new()
-                .post(Url::from_str(&dotenvy::var("TOKEN_URL").unwrap()).unwrap())
-                .body(body.clone())
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .send()
-                .await
-                .unwrap()
-                .json()
-                .await
-                .unwrap();
+                let response: AccessTokenResponse = reqwest::Client::new()
+                    .post(Url::from_str(&dotenvy::var("TOKEN_URL").unwrap()).unwrap())
+                    .body(body.clone())
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .send()
+                    .await
+                    .unwrap()
+                    .json()
+                    .await
+                    .unwrap();
 
-            return Ok(response);
+                return Ok(response);
+            }
         }
-    }
 
-    Err("Unable to get access token".to_string())
-}
+        Err("Unable to get access token".to_string())
+    }
 
     async fn start_local_server_for_single_request(&self) -> AccessTokenResponse {
         let redirect_uri = dotenvy::var("REDIRECT_URI").unwrap();
