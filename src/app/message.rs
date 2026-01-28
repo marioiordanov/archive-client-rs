@@ -1,5 +1,3 @@
-use std::{fmt::Display, io::ErrorKind};
-
 use crate::{
     screens,
     services::auth::AccessTokenResponse,
@@ -10,11 +8,20 @@ use crate::{
 pub enum Message {
     Screen(ScreenMessage),
     Auth(AuthMessage),
+    Org(OrgMessage),
 }
 
 #[derive(Clone, Debug)]
 pub enum ScreenMessage {
     Login(screens::signin::Message),
+    OrgSelection(screens::org_selection::Message),
+}
+
+#[derive(Clone, Debug)]
+pub enum OrgMessage {
+    InvitationsLoaded(Result<Vec<crate::app::state::OrgInvitation>, String>),
+    OrgCreated(Result<String, String>),
+    OrgJoined(Result<(), String>),
 }
 
 #[derive(Clone, Debug)]
@@ -29,6 +36,25 @@ pub enum AuthError {
     #[error("Sign-in cancelled by user")]
     CancelledByUser,
 
+    #[error(transparent)]
+    Common(#[from] CommonServiceError),
+}
+
+impl From<AuthError> for UiError {
+    fn from(value: AuthError) -> Self {
+        match value {
+            AuthError::CancelledByUser => UiError {
+                title: "Sign-in cancelled".into(),
+                detail: None,
+                kind: UiErrorKind::Info,
+            },
+            AuthError::Common(common) => common.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum CommonServiceError {
     #[error("Session expired")]
     TokenExpired, // this to be moved to errors related to drive api service
 
@@ -45,39 +71,42 @@ pub enum AuthError {
     Unknown(String),
 }
 
-impl From<AuthError> for UiError {
-    fn from(value: AuthError) -> Self {
+impl From<CommonServiceError> for UiError {
+    fn from(value: CommonServiceError) -> Self {
         match value {
-            AuthError::CancelledByUser => UiError {
-                title: "Sign-in cancelled".into(),
-                detail: None,
-                kind: UiErrorKind::Info,
-            },
-            AuthError::TokenExpired => UiError {
+            CommonServiceError::TokenExpired => UiError {
                 title: "Session expired".into(),
                 detail: Some("Please sign in again.".into()),
                 kind: UiErrorKind::Warning,
             },
-            AuthError::PermissionDenied => UiError {
+            CommonServiceError::PermissionDenied => UiError {
                 title: "Permission required".into(),
                 detail: Some("We need Google Drive access to archive files.".into()),
                 kind: UiErrorKind::Warning,
             },
-            AuthError::InvalidResponse => UiError {
+            CommonServiceError::InvalidResponse => UiError {
                 title: "".into(),
                 detail: Some("Malformed response. Contact the developer".into()),
                 kind: UiErrorKind::Error,
             },
-            AuthError::NetworkError => UiError {
+            CommonServiceError::NetworkError => UiError {
                 title: "Connectivity error".into(),
                 detail: Some("Please check you internet connection".into()),
                 kind: UiErrorKind::Info,
             },
-            AuthError::Unknown(reason) => UiError {
+            CommonServiceError::Unknown(reason) => UiError {
                 title: "".into(),
                 detail: Some(reason),
                 kind: UiErrorKind::Error,
             },
         }
     }
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum OrgError {
+    #[error("Root folder not found")]
+    NoRootFolder,
+    #[error(transparent)]
+    Common(#[from] CommonServiceError),
 }

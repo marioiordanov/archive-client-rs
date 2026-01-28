@@ -6,11 +6,11 @@ use crate::{
     ArchiveClient,
     app::{
         self,
-        message::{Message, ScreenMessage},
+        message::{Message, OrgMessage, ScreenMessage},
         state::{Screen, UserProfile},
     },
     screens,
-    services::{self, auth::AuthService},
+    services::{self, auth::AuthService, org::OrgService},
 };
 
 impl ArchiveClient {
@@ -47,6 +47,9 @@ impl ArchiveClient {
                 self.app.session.auth = app::state::AuthState::SignedIn;
                 let email = services::auth::AuthService {}
                     .extract_email_from_access_token(&access_token.id_token);
+
+                let user_email = email.clone();
+
                 self.app.session.user = Some(UserProfile {
                     email,
                     scopes: access_token
@@ -65,6 +68,42 @@ impl ArchiveClient {
                 });
                 self.app.session.auth = app::state::AuthState::SignedIn;
 
+                // Navigate to organization selection screen
+                self.app.screen =
+                    Screen::OrgSelection(screens::org_selection::OrgSelectionScreen::new());
+
+                // Fetch invitations for the user
+                Task::perform(
+                    async move { OrgService::fetch_invitations(&user_email).await },
+                    |result| Message::Org(OrgMessage::InvitationsLoaded(result)),
+                )
+            }
+            Message::Org(OrgMessage::InvitationsLoaded(Ok(invitations))) => {
+                if let Screen::OrgSelection(screen) = &mut self.app.screen {
+                    screen.invitations = invitations.clone();
+                    screen.loading = false;
+                    self.app.org.invitations = invitations;
+                }
+                Task::none()
+            }
+            Message::Org(OrgMessage::InvitationsLoaded(Err(_err))) => {
+                if let Screen::OrgSelection(screen) = &mut self.app.screen {
+                    screen.loading = false;
+                }
+                Task::none()
+            }
+            Message::Screen(ScreenMessage::OrgSelection(
+                screens::org_selection::Message::CreateOrgClicked,
+            )) => {
+                // TODO: Navigate to create org screen or trigger create org flow
+                println!("Create organization clicked");
+                Task::none()
+            }
+            Message::Screen(ScreenMessage::OrgSelection(
+                screens::org_selection::Message::JoinOrgClicked(org_id),
+            )) => {
+                // TODO: Join the organization with the given org_id
+                println!("Join organization clicked: {}", org_id);
                 Task::none()
             }
             _ => Task::none(),

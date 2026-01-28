@@ -8,13 +8,17 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 use url::Url;
 
-use crate::app::message::AuthError;
+use crate::{
+    app::message::{AuthError, CommonServiceError},
+    constants::{AUTH_URL, REDIRECT_URI, TOKEN_URL},
+};
 
 const HTML_SUCCESSFUL_SIGN_IN: &[u8] = include_bytes!("../../sign-in-complete.html");
 
 const SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/drive.metadata.readonly",
     "email",
+    "https://www.googleapis.com/auth/drive.file",
 ];
 
 pub struct AuthService;
@@ -65,7 +69,7 @@ impl AuthService {
             .finish();
 
         let response: RefreshTokenResponse = reqwest::Client::new()
-            .post(Url::from_str(&dotenvy::var("TOKEN_URL").unwrap()).unwrap())
+            .post(Url::from_str(TOKEN_URL).unwrap())
             .body(body.clone())
             .header("Content-Type", "application/x-www-form-urlencoded")
             .send()
@@ -95,43 +99,40 @@ impl AuthService {
                 let body = url::form_urlencoded::Serializer::new(String::new())
                     .append_pair("code", &code)
                     .append_pair("client_id", &dotenvy::var("CLIENT_ID").unwrap())
-                    .append_pair("redirect_uri", &dotenvy::var("REDIRECT_URI").unwrap())
+                    .append_pair("redirect_uri", REDIRECT_URI)
                     .append_pair("grant_type", "authorization_code")
                     .append_pair("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
                     .finish();
 
                 return reqwest::Client::new()
-                    .post(Url::from_str(&dotenvy::var("TOKEN_URL").unwrap()).unwrap())
+                    .post(Url::from_str(TOKEN_URL).unwrap())
                     .body(body.clone())
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .send()
                     .await
-                    .map_err(|_| AuthError::NetworkError)?
+                    .map_err(|_| AuthError::from(CommonServiceError::NetworkError))?
                     .json::<AccessTokenResponse>()
                     .await
-                    .map_err(|_| AuthError::InvalidResponse);
+                    .map_err(|_| AuthError::from(CommonServiceError::InvalidResponse));
             }
         }
 
-        Err(AuthError::PermissionDenied)
+        Err(CommonServiceError::PermissionDenied.into())
     }
 
     async fn start_local_server_for_single_request(
         &self,
     ) -> Result<AccessTokenResponse, AuthError> {
-        let redirect_uri = dotenvy::var("REDIRECT_URI").unwrap();
-        let uri = Url::parse(&redirect_uri)
-            .map_err(|_| AuthError::Unknown("Malformed url".to_string()))?;
+        let uri = Url::from_str(REDIRECT_URI).unwrap();
 
         let socket: SocketAddr = format!(
             "{}:{}",
-            uri.host_str()
-                .ok_or(AuthError::Unknown("Internal error".into()))?,
-            uri.port().ok_or(AuthError::Unknown("".into()))?
+            uri.host_str().unwrap(), // safe, because it comes from a constant
+            uri.port().unwrap()      // safe, because it comes from a constant
         )
         .parse()
         .map_err(|_| {
-            AuthError::Unknown("Unable to convert redirect_uri to host:port format".into())
+            CommonServiceError::Unknown("Unable to convert redirect_uri to host:port format".into())
         })?;
 
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -139,12 +140,13 @@ impl AuthService {
 
         let listener = tokio::net::TcpListener::bind(socket)
             .await
-            .map_err(|_| AuthError::NetworkError)?;
+            .map_err(|_| CommonServiceError::NetworkError)?;
 
         let (stream, _) = listener
             .accept()
             .await
-            .map_err(|_| AuthError::NetworkError)?;
+            .map_err(|_| AuthError::from(CommonServiceError::NetworkError))?;
+
         let io = TokioIo::new(stream);
         let service = service_fn(move |req| {
             let sender = tx.clone();
@@ -155,11 +157,21 @@ impl AuthService {
                     let err_string = err.to_string();
                     let status_code = match err {
                         AuthError::CancelledByUser => StatusCode::BAD_REQUEST,
-                        AuthError::TokenExpired => StatusCode::UNAUTHORIZED,
-                        AuthError::PermissionDenied => StatusCode::FORBIDDEN,
-                        AuthError::InvalidResponse => StatusCode::BAD_GATEWAY,
-                        AuthError::NetworkError => StatusCode::SERVICE_UNAVAILABLE,
-                        AuthError::Unknown(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                        AuthError::Common(CommonServiceError::TokenExpired) => {
+                            StatusCode::UNAUTHORIZED
+                        }
+                        AuthError::Common(CommonServiceError::PermissionDenied) => {
+                            StatusCode::FORBIDDEN
+                        }
+                        AuthError::Common(CommonServiceError::InvalidResponse) => {
+                            StatusCode::BAD_GATEWAY
+                        }
+                        AuthError::Common(CommonServiceError::NetworkError) => {
+                            StatusCode::SERVICE_UNAVAILABLE
+                        }
+                        AuthError::Common(CommonServiceError::Unknown(_)) => {
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        }
                     };
 
                     if let Some(sender) = sender.lock().await.take() {
@@ -189,16 +201,18 @@ impl AuthService {
 
         match rx.await {
             Ok(value) => value,
-            Err(_) => Err(AuthError::Unknown("Message channel problem".to_string())),
+            Err(_) => {
+                Err(CommonServiceError::Unknown("Message channel problem".to_string()).into())
+            }
         }
     }
 
     fn open_browser(&self) {
-        let mut url = Url::parse(&dotenvy::var("AUTH_URL").unwrap()).unwrap();
+        let mut url = Url::from_str(AUTH_URL).unwrap(); // safe, because it comes from a constant
 
         url.query_pairs_mut()
             .append_pair("client_id", &dotenvy::var("CLIENT_ID").unwrap())
-            .append_pair("redirect_uri", &dotenvy::var("REDIRECT_URI").unwrap())
+            .append_pair("redirect_uri", REDIRECT_URI)
             .append_pair("scope", &SCOPES.join(" "))
             .append_pair("access_type", "offline")
             .append_pair("response_type", "code");

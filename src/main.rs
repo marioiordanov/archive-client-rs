@@ -1,6 +1,7 @@
 use iced::Element;
 
 mod app;
+mod constants;
 mod screens;
 mod services;
 mod ui_error;
@@ -43,6 +44,7 @@ impl Default for ArchiveClient {
             org: OrgState {
                 config: None,
                 status: app::state::OrgStatus::Unknown,
+                invitations: Vec::new(),
             },
         };
         Self { app: app_state }
@@ -57,6 +59,9 @@ impl ArchiveClient {
         let contents = match &self.app.screen {
             app::state::Screen::SignIn(screen) => {
                 println!("{:?}", screen);
+                screen.view().map(|m| Message::Screen(m.into()))
+            }
+            app::state::Screen::OrgSelection(screen) => {
                 screen.view().map(|m| Message::Screen(m.into()))
             }
             app::state::Screen::GetOrCreateOrganisation => todo!(),
