@@ -8,6 +8,8 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 use url::Url;
 
+use crate::app::message::AuthError;
+
 const HTML_SUCCESSFUL_SIGN_IN: &[u8] = include_bytes!("../../sign-in-complete.html");
 
 const SCOPES: &[&str] = &[
@@ -75,7 +77,7 @@ impl AuthService {
 
         response
     }
-    pub async fn get_drive_access_token(&self) -> AccessTokenResponse {
+    pub async fn get_drive_access_token(&self) -> Result<AccessTokenResponse, AuthError> {
         self.open_browser();
         self.start_local_server_for_single_request().await
     }
@@ -83,7 +85,7 @@ impl AuthService {
     async fn oauth2_redirect_uri_handler(
         &self,
         req: Request<hyper::body::Incoming>,
-    ) -> Result<AccessTokenResponse, String> {
+    ) -> Result<AccessTokenResponse, AuthError> {
         if let Some(query) = req.uri().query() {
             let params: HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes())
                 .into_owned()
@@ -98,51 +100,85 @@ impl AuthService {
                     .append_pair("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
                     .finish();
 
-                return Ok(reqwest::Client::new()
+                return reqwest::Client::new()
                     .post(Url::from_str(&dotenvy::var("TOKEN_URL").unwrap()).unwrap())
                     .body(body.clone())
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .send()
                     .await
-                    .unwrap()
+                    .map_err(|_| AuthError::NetworkError)?
                     .json::<AccessTokenResponse>()
                     .await
-                    .unwrap());
+                    .map_err(|_| AuthError::InvalidResponse);
             }
         }
 
-        Err("Unable to get access token".to_string())
+        Err(AuthError::PermissionDenied)
     }
 
-    async fn start_local_server_for_single_request(&self) -> AccessTokenResponse {
+    async fn start_local_server_for_single_request(
+        &self,
+    ) -> Result<AccessTokenResponse, AuthError> {
         let redirect_uri = dotenvy::var("REDIRECT_URI").unwrap();
-        let uri = Url::parse(&redirect_uri).unwrap();
-        let socket: SocketAddr = format!("{}:{}", uri.host_str().unwrap(), uri.port().unwrap())
-            .parse()
-            .unwrap();
+        let uri = Url::parse(&redirect_uri)
+            .map_err(|_| AuthError::Unknown("Malformed url".to_string()))?;
+
+        let socket: SocketAddr = format!(
+            "{}:{}",
+            uri.host_str()
+                .ok_or(AuthError::Unknown("Internal error".into()))?,
+            uri.port().ok_or(AuthError::Unknown("".into()))?
+        )
+        .parse()
+        .map_err(|_| {
+            AuthError::Unknown("Unable to convert redirect_uri to host:port format".into())
+        })?;
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         let tx = std::sync::Arc::new(Mutex::new(Some(tx)));
 
-        let listener = tokio::net::TcpListener::bind(socket).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(socket)
+            .await
+            .map_err(|_| AuthError::NetworkError)?;
 
-        let (stream, _) = listener.accept().await.unwrap();
+        let (stream, _) = listener
+            .accept()
+            .await
+            .map_err(|_| AuthError::NetworkError)?;
         let io = TokioIo::new(stream);
         let service = service_fn(move |req| {
             let sender = tx.clone();
             async move {
-                let access_token = self.oauth2_redirect_uri_handler(req).await.unwrap();
-                if let Some(sender) = sender.lock().await.take() {
-                    sender.send(access_token).unwrap();
-                }
+                let access_token = self.oauth2_redirect_uri_handler(req).await;
 
-                Ok::<Response<Full<Bytes>>, Infallible>(
+                if let Err(err) = access_token {
+                    let err_string = err.to_string();
+                    let status_code = match err {
+                        AuthError::CancelledByUser => StatusCode::BAD_REQUEST,
+                        AuthError::TokenExpired => StatusCode::UNAUTHORIZED,
+                        AuthError::PermissionDenied => StatusCode::FORBIDDEN,
+                        AuthError::InvalidResponse => StatusCode::BAD_GATEWAY,
+                        AuthError::NetworkError => StatusCode::SERVICE_UNAVAILABLE,
+                        AuthError::Unknown(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                    };
+
+                    if let Some(sender) = sender.lock().await.take() {
+                        sender.send(Err(err)).unwrap(); // generally safe, because rx is closed after
+                    }
+
+                    Response::builder()
+                        .status(status_code)
+                        .body(Full::new(Bytes::from(err_string)))
+                } else {
+                    if let Some(sender) = sender.lock().await.take() {
+                        sender.send(access_token).unwrap(); // generally safe, because rx is closed after
+                    }
+
                     Response::builder()
                         .status(StatusCode::OK)
                         .header("content-type", "text/html")
                         .body(Full::new(Bytes::from_static(HTML_SUCCESSFUL_SIGN_IN)))
-                        .unwrap(),
-                )
+                }
             }
         });
 
@@ -151,7 +187,10 @@ impl AuthService {
             .serve_connection(io, service)
             .await;
 
-        rx.await.unwrap()
+        match rx.await {
+            Ok(value) => value,
+            Err(_) => Err(AuthError::Unknown("Message channel problem".to_string())),
+        }
     }
 
     fn open_browser(&self) {

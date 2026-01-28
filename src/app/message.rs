@@ -1,3 +1,5 @@
+use std::{fmt::Display, io::ErrorKind};
+
 use crate::{
     screens,
     services::auth::AccessTokenResponse,
@@ -22,11 +24,25 @@ pub enum AuthMessage {
     SignedOut,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum AuthError {
+    #[error("Sign-in cancelled by user")]
     CancelledByUser,
-    TokenExpired,
+
+    #[error("Session expired")]
+    TokenExpired, // this to be moved to errors related to drive api service
+
+    #[error("Permission denied")]
     PermissionDenied,
+
+    #[error("Invalid response from server")]
+    InvalidResponse,
+
+    #[error("Network error occurred")]
+    NetworkError,
+
+    #[error("Unknown error: {0}")]
+    Unknown(String),
 }
 
 impl From<AuthError> for UiError {
@@ -46,6 +62,21 @@ impl From<AuthError> for UiError {
                 title: "Permission required".into(),
                 detail: Some("We need Google Drive access to archive files.".into()),
                 kind: UiErrorKind::Warning,
+            },
+            AuthError::InvalidResponse => UiError {
+                title: "".into(),
+                detail: Some("Malformed response. Contact the developer".into()),
+                kind: UiErrorKind::Error,
+            },
+            AuthError::NetworkError => UiError {
+                title: "Connectivity error".into(),
+                detail: Some("Please check you internet connection".into()),
+                kind: UiErrorKind::Info,
+            },
+            AuthError::Unknown(reason) => UiError {
+                title: "".into(),
+                detail: Some(reason),
+                kind: UiErrorKind::Error,
             },
         }
     }

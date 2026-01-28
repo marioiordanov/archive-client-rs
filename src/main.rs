@@ -1,49 +1,13 @@
-use http_body_util::{BodyExt, Full};
-use hyper::{
-    Request, Response, StatusCode,
-    body::{Buf, Bytes},
-    server::conn::http1::{self, Builder},
-    service::service_fn,
-};
-use hyper_util::rt::TokioIo;
-use iced::widget::column;
-use iced::{
-    Application, Element, Font, Program, Subscription, Task, Theme, color,
-    futures::channel::mpsc,
-    widget::{
-        Column, button, center_y, rich_text, span,
-        text::{self, base},
-    },
-};
-use log::info;
-use serde::{Deserialize, de::DeserializeOwned};
-use std::thread;
-use std::{
-    collections::HashMap,
-    convert::Infallible,
-    io::{Read, Write},
-    net::{SocketAddr, TcpStream},
-    str::{FromStr, from_utf8},
-    thread::JoinHandle,
-};
-use std::{
-    net::TcpListener,
-    time::{SystemTime, UNIX_EPOCH},
-};
-use tokio::sync::Mutex;
+use iced::Element;
 
-mod screens;
-use url::Url;
 mod app;
+mod screens;
 mod services;
 mod ui_error;
 
-use crate::{
-    app::{
-        message::{Message, ScreenMessage},
-        state::{AppState, OrgState, Screen, SessionState, UserProfile},
-    },
-    services::auth::{self, AuthService},
+use crate::app::{
+    message::Message,
+    state::{AppState, OrgState, SessionState},
 };
 
 fn main() -> iced::Result {
