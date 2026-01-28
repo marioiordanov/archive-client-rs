@@ -1,4 +1,4 @@
-use std::{collections::HashMap, convert::Infallible, net::SocketAddr, str::FromStr as _};
+use std::{collections::HashMap, net::SocketAddr, str::FromStr as _};
 
 use base64::{Engine, engine::general_purpose};
 use http_body_util::Full;

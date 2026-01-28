@@ -14,7 +14,7 @@ pub struct SignInScreen {
 }
 
 impl SignInScreen {
-    pub fn view(&self) -> Element<Message> {
+    pub fn view(&self) -> Element<'_, Message> {
         let title = text("Sign in").size(32);
 
         let sign_in = {
