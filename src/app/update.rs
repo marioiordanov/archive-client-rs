@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use iced::Task;
+use iced::{Task, futures::FutureExt};
 
 use crate::{
     ArchiveClient,
@@ -9,7 +9,7 @@ use crate::{
         message::{Message, OrgMessage, ScreenMessage},
         state::{Screen, UserProfile},
     },
-    screens,
+    screens::{self, signin::SignInScreen},
     services::{self, auth::AuthService, org::OrgService},
 };
 
@@ -23,7 +23,7 @@ impl ArchiveClient {
             )) => {
                 if let Screen::SignIn(screen) = &mut self.app.screen {
                     screen.update(msg.clone());
-                    Task::perform(AuthService {}.get_drive_access_token(), |access_token| {
+                    Task::perform(AuthService::get_drive_access_token(), |access_token| {
                         Message::Auth(app::message::AuthMessage::AccessTokenReceived(access_token))
                     })
                 } else {
@@ -45,8 +45,9 @@ impl ArchiveClient {
             }
             Message::Auth(app::message::AuthMessage::AccessTokenReceived(Ok(access_token))) => {
                 self.app.session.auth = app::state::AuthState::SignedIn;
-                let email = services::auth::AuthService {}
-                    .extract_email_from_access_token(&access_token.id_token);
+                let email = services::auth::AuthService::extract_email_from_access_token(
+                    &access_token.id_token,
+                );
 
                 let user_email = email.clone();
 
@@ -82,7 +83,6 @@ impl ArchiveClient {
                 if let Screen::OrgSelection(screen) = &mut self.app.screen {
                     screen.invitations = invitations.clone();
                     screen.loading = false;
-                    self.app.org.invitations = invitations;
                 }
                 Task::none()
             }
@@ -93,11 +93,23 @@ impl ArchiveClient {
                 Task::none()
             }
             Message::Screen(ScreenMessage::OrgSelection(
-                screens::org_selection::Message::CreateOrgClicked,
+                msg @ screens::org_selection::Message::CreateOrgClicked,
             )) => {
-                // TODO: Navigate to create org screen or trigger create org flow
-                println!("Create organization clicked");
-                Task::none()
+                if let Screen::OrgSelection(screen) = &mut self.app.screen {
+                    screen.update(msg.clone());
+                    if let Some(user) = self.app.session.user.as_ref() {
+                        Task::perform(
+                            OrgService::get_or_create_organization(user.access_token.clone(), user.email.clone()),
+                            |organisation_id| Message::Org(OrgMessage::OrgCreated(organisation_id)),
+                        )
+                    } else {
+                        Task::done(Message::Screen(app::message::ScreenMessage::Login(
+                            screens::signin::Message::SignInClicked,
+                        )))
+                    }
+                } else {
+                    Task::none()
+                }
             }
             Message::Screen(ScreenMessage::OrgSelection(
                 screens::org_selection::Message::JoinOrgClicked(org_id),

@@ -3,7 +3,6 @@ use crate::screens::{self};
 pub enum Screen {
     SignIn(screens::signin::SignInScreen),
     OrgSelection(screens::org_selection::OrgSelectionScreen),
-    GetOrCreateOrganisation,
     ListFiles,
     Syncing,
 }
@@ -42,7 +41,6 @@ pub struct UserProfile {
 pub struct OrgState {
     pub config: Option<OrgConfig>,
     pub status: OrgStatus,
-    pub invitations: Vec<OrgInvitation>,
 }
 
 pub struct OrgConfig {

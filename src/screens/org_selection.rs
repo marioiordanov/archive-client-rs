@@ -81,7 +81,15 @@ impl OrgSelectionScreen {
             .into()
     }
 
-    pub fn update(&mut self, _msg: Message) {}
+    pub fn update(&mut self, msg: Message) {
+        match msg {
+            Message::CreateOrgClicked => {
+                self.invitations = vec![];
+                self.loading = true;
+            }
+            Message::JoinOrgClicked(_) => todo!(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

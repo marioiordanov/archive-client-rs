@@ -42,7 +42,7 @@ pub struct RefreshTokenResponse {
 }
 
 impl AuthService {
-    pub fn extract_email_from_access_token(&self, id_token: &str) -> String {
+    pub fn extract_email_from_access_token(id_token: &str) -> String {
         let parts: Vec<&str> = id_token.split(".").collect();
         if parts.len() != 3 {
             panic!("Invalid JWT format");
@@ -60,7 +60,7 @@ impl AuthService {
             .unwrap()
             .email
     }
-    pub async fn refresh_access_token(&self, refresh_token: &str) -> RefreshTokenResponse {
+    pub async fn refresh_access_token(refresh_token: &str) -> RefreshTokenResponse {
         let body = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("client_id", &dotenvy::var("CLIENT_ID").unwrap())
             .append_pair("refresh_token", refresh_token)
@@ -81,13 +81,12 @@ impl AuthService {
 
         response
     }
-    pub async fn get_drive_access_token(&self) -> Result<AccessTokenResponse, AuthError> {
-        self.open_browser();
-        self.start_local_server_for_single_request().await
+    pub async fn get_drive_access_token() -> Result<AccessTokenResponse, AuthError> {
+        Self::open_browser();
+        Self::start_local_server_for_single_request().await
     }
 
     async fn oauth2_redirect_uri_handler(
-        &self,
         req: Request<hyper::body::Incoming>,
     ) -> Result<AccessTokenResponse, AuthError> {
         if let Some(query) = req.uri().query() {
@@ -120,9 +119,7 @@ impl AuthService {
         Err(CommonServiceError::PermissionDenied.into())
     }
 
-    async fn start_local_server_for_single_request(
-        &self,
-    ) -> Result<AccessTokenResponse, AuthError> {
+    async fn start_local_server_for_single_request() -> Result<AccessTokenResponse, AuthError> {
         let uri = Url::from_str(REDIRECT_URI).unwrap();
 
         let socket: SocketAddr = format!(
@@ -151,7 +148,7 @@ impl AuthService {
         let service = service_fn(move |req| {
             let sender = tx.clone();
             async move {
-                let access_token = self.oauth2_redirect_uri_handler(req).await;
+                let access_token = Self::oauth2_redirect_uri_handler(req).await;
 
                 if let Err(err) = access_token {
                     let err_string = err.to_string();
@@ -207,7 +204,7 @@ impl AuthService {
         }
     }
 
-    fn open_browser(&self) {
+    fn open_browser() {
         let mut url = Url::from_str(AUTH_URL).unwrap(); // safe, because it comes from a constant
 
         url.query_pairs_mut()

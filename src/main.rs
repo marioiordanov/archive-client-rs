@@ -44,7 +44,6 @@ impl Default for ArchiveClient {
             org: OrgState {
                 config: None,
                 status: app::state::OrgStatus::Unknown,
-                invitations: Vec::new(),
             },
         };
         Self { app: app_state }
@@ -64,7 +63,6 @@ impl ArchiveClient {
             app::state::Screen::OrgSelection(screen) => {
                 screen.view().map(|m| Message::Screen(m.into()))
             }
-            app::state::Screen::GetOrCreateOrganisation => todo!(),
             app::state::Screen::ListFiles => todo!(),
             app::state::Screen::Syncing => todo!(),
         };

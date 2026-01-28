@@ -19,9 +19,9 @@ pub enum ScreenMessage {
 
 #[derive(Clone, Debug)]
 pub enum OrgMessage {
-    InvitationsLoaded(Result<Vec<crate::app::state::OrgInvitation>, String>),
-    OrgCreated(Result<String, String>),
-    OrgJoined(Result<(), String>),
+    InvitationsLoaded(Result<Vec<crate::app::state::OrgInvitation>, OrgError>),
+    OrgCreated(Result<String, OrgError>),
+    OrgJoined(Result<(), OrgError>),
 }
 
 #[derive(Clone, Debug)]

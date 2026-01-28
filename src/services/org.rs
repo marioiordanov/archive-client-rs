@@ -6,7 +6,7 @@ use url::Url;
 use crate::{
     app::{
         message::{CommonServiceError, OrgError},
-        state::{OrgInvitation},
+        state::OrgInvitation,
     },
     constants::FILES_URL,
 };
@@ -25,7 +25,7 @@ struct RootFolderResponse {
 pub struct OrgService;
 
 impl OrgService {
-    pub async fn fetch_invitations(_user_email: &str) -> Result<Vec<OrgInvitation>, String> {
+    pub async fn fetch_invitations(_user_email: &str) -> Result<Vec<OrgInvitation>, OrgError> {
         // TODO: Make API call to backend to fetch invitations
         // For now, simulate network delay and return mock data
 
@@ -49,10 +49,10 @@ impl OrgService {
     }
 
     pub async fn get_or_create_organization(
-        access_token: &str,
-        owner_email: &str,
+        access_token: String,
+        owner_email: String,
     ) -> Result<String, OrgError> {
-        if let Ok(id) = OrgService::find_root_folder(access_token, owner_email).await {
+        if let Ok(id) = OrgService::find_root_folder(&access_token, &owner_email).await {
             return Ok(id);
         }
 
@@ -69,7 +69,7 @@ impl OrgService {
 
         let mut map = HashMap::new();
         map.insert("archiveClientType", "application");
-        map.insert("orgId", owner_email);
+        map.insert("orgId", &owner_email);
 
         reqwest::Client::new()
             .post(url)
