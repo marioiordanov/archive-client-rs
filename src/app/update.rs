@@ -16,6 +16,7 @@ use crate::{
 impl ArchiveClient {
     // changes the state, switch screen if needed
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        println!("{message:?}");
         match message {
             Message::Screen(ScreenMessage::Login(
                 msg @ screens::signin::Message::SignInClicked,

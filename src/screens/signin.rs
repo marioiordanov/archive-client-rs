@@ -1,5 +1,7 @@
+use iced::alignment::Horizontal;
+use iced::alignment::Vertical::{self};
 use iced::widget::{column, container, row, text};
-use iced::{Alignment, Length, Task};
+use iced::{Alignment, Border, Color, Length, Padding};
 use iced::{Element, widget::button};
 
 use crate::app::message::ScreenMessage;
@@ -31,7 +33,6 @@ impl SignInScreen {
 
         let error_block: Element<Message> = if let Some(err) = &self.error {
             let dismiss = button("Dismiss").on_press(Message::ClearError);
-
             container(
                 column![
                     text(&err.title).size(18),
@@ -46,20 +47,41 @@ impl SignInScreen {
             )
             .padding(12)
             .width(Length::Fill)
+            .style(|_theme| container::Style {
+                border: Border {
+                    color: Color::from_rgb(1.0, 0.0, 0.0),
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                background: Some(Color::from_rgb(1.0, 0.9, 0.9).into()),
+                ..Default::default()
+            })
             .into()
         } else {
             container(text("")).into()
         };
 
-        container(
+        let content = container(
             column![title, sign_in, error_block]
                 .spacing(16)
                 .align_x(Alignment::Center),
         )
         .padding(24)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        .width(Length::Shrink);
+
+        // Use center with padding to offset upward
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding {
+                top: 0.0,
+                right: 0.0,
+                bottom: 100.0,
+                left: 0.0,
+            }) // [top, right, bottom, left] - adds bottom padding to shift up
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .into()
     }
 
     pub fn update(&mut self, msg: Message) {
