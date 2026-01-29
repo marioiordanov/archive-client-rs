@@ -87,7 +87,10 @@ impl OrgService {
             .map_err(|_| OrgError::from(CommonServiceError::InvalidResponse))
     }
 
-    async fn find_root_folder(access_token: &str, owner_email: &str) -> Result<RootFolderEntry, OrgError> {
+    async fn find_root_folder(
+        access_token: &str,
+        owner_email: &str,
+    ) -> Result<RootFolderEntry, OrgError> {
         let mut url = Url::parse(FILES_URL).unwrap(); // safe, because it comes from a constant
         let query_string = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("fields", "files(id,name)")

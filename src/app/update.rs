@@ -10,7 +10,7 @@ use crate::{
         state::{Screen, UserProfile},
     },
     screens::{self, signin::SignInScreen},
-    services::{self, auth::AuthService, org::OrgService},
+    services::{self, auth::AuthService, org::OrgService, user::UserService},
 };
 
 impl ArchiveClient {
@@ -50,8 +50,7 @@ impl ArchiveClient {
                 );
 
                 let user_email = email.clone();
-
-                self.app.session.user = Some(UserProfile {
+                let user_profile = UserProfile {
                     email,
                     scopes: access_token
                         .scope
@@ -66,7 +65,11 @@ impl ArchiveClient {
                         + access_token.expires_in,
                     token_type: access_token.token_type,
                     access_token: access_token.access_token,
-                });
+                };
+
+                UserService::save_user_profile(&user_profile);
+
+                self.app.session.user = Some(user_profile);
                 self.app.session.auth = app::state::AuthState::SignedIn;
 
                 // Navigate to organization selection screen
@@ -99,7 +102,10 @@ impl ArchiveClient {
                     screen.update(msg.clone());
                     if let Some(user) = self.app.session.user.as_ref() {
                         Task::perform(
-                            OrgService::get_or_create_organization(user.access_token.clone(), user.email.clone()),
+                            OrgService::get_or_create_organization(
+                                user.access_token.clone(),
+                                user.email.clone(),
+                            ),
                             |organisation| Message::Org(OrgMessage::OrgCreated(organisation)),
                         )
                     } else {

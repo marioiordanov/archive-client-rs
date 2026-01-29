@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::screens::{self};
 
 pub enum Screen {
@@ -29,6 +31,7 @@ pub enum AuthState {
     SignedIn,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct UserProfile {
     pub email: String,
     pub access_token: String,
