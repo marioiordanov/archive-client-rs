@@ -65,8 +65,8 @@ pub enum CommonServiceError {
     #[error("Permission denied")]
     PermissionDenied,
 
-    #[error("Invalid response from server")]
-    InvalidResponse,
+    #[error("Invalid response from server: {}", reason)]
+    InvalidResponse { reason: String },
 
     #[error("Network error occurred")]
     NetworkError,
@@ -88,7 +88,7 @@ impl From<CommonServiceError> for UiError {
                 detail: Some("We need Google Drive access to archive files.".into()),
                 kind: UiErrorKind::Warning,
             },
-            CommonServiceError::InvalidResponse => UiError {
+            CommonServiceError::InvalidResponse { .. } => UiError {
                 title: "".into(),
                 detail: Some("Malformed response. Contact the developer".into()),
                 kind: UiErrorKind::Error,

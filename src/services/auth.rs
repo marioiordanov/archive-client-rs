@@ -38,7 +38,6 @@ pub struct RefreshTokenResponse {
     pub access_token: String,
     pub expires_in: u64,
     pub token_type: String,
-    pub refresh_token: String,
 }
 
 impl AuthService {
@@ -116,7 +115,11 @@ impl AuthService {
                     .map_err(|_| AuthError::from(CommonServiceError::NetworkError))?
                     .json::<AccessTokenResponse>()
                     .await
-                    .map_err(|_| AuthError::from(CommonServiceError::InvalidResponse));
+                    .map_err(|e| {
+                        AuthError::from(CommonServiceError::InvalidResponse {
+                            reason: e.to_string(),
+                        })
+                    });
             }
         }
 
@@ -164,7 +167,7 @@ impl AuthService {
                         AuthError::Common(CommonServiceError::PermissionDenied) => {
                             StatusCode::FORBIDDEN
                         }
-                        AuthError::Common(CommonServiceError::InvalidResponse) => {
+                        AuthError::Common(CommonServiceError::InvalidResponse { .. }) => {
                             StatusCode::BAD_GATEWAY
                         }
                         AuthError::Common(CommonServiceError::NetworkError) => {

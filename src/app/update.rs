@@ -54,9 +54,7 @@ impl ArchiveClient {
                     Task::perform(
                         async move { AuthService::refresh_access_token(&refresh_token).await },
                         |response| {
-                            Message::Auth(app::message::AuthMessage::AccessTokenRefreshed(
-                                response,
-                            ))
+                            Message::Auth(app::message::AuthMessage::AccessTokenRefreshed(response))
                         },
                     )
                 }
@@ -65,15 +63,32 @@ impl ArchiveClient {
         }
     }
 
+    fn handle_org_messages(&mut self, message: app::message::OrgMessage) -> Task<Message> {
+        match message {
+            OrgMessage::InvitationsLoaded(Ok(invitations)) => {
+                if let Screen::OrgSelection(screen) = &mut self.app.screen {
+                    screen.invitations = invitations.clone();
+                    screen.loading = false;
+                }
+                Task::none()
+            }
+            OrgMessage::OrgJoined(Err(e))
+            | OrgMessage::InviteSent(Err(e))
+            | OrgMessage::InvitationsLoaded(Err(e))
+            | OrgMessage::OrgCreated(Err(e)) => self.handle_error(e.into()),
+            OrgMessage::OrgCreated(root_folder_entry) => todo!(),
+            OrgMessage::OrgJoined(Ok(_)) => todo!(),
+            OrgMessage::InviteSent(Ok(_)) => todo!(),
+        }
+    }
+
     fn handle_auth_messages(&mut self, message: app::message::AuthMessage) -> Task<Message> {
         match message {
-            app::message::AuthMessage::AccessTokenRefreshed(Err(_)) | app::message::AuthMessage::SignedOut => {
-                self.re_auth()
-            }
+            app::message::AuthMessage::AccessTokenRefreshed(Err(_))
+            | app::message::AuthMessage::SignedOut => self.re_auth(),
             app::message::AuthMessage::AccessTokenRefreshed(Ok(refreshed_token)) => {
                 self.app.session.user.access_token = refreshed_token.access_token;
                 self.app.session.user.token_type = refreshed_token.token_type;
-                self.app.session.user.refresh_token = refreshed_token.refresh_token;
                 self.app.session.user.expires_at = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
@@ -84,7 +99,7 @@ impl ArchiveClient {
 
                 if let Some(intent) = self.app.retry_intent {
                     self.run_intent(intent)
-                }else {
+                } else {
                     Task::none()
                 }
             }
@@ -158,22 +173,8 @@ impl ArchiveClient {
 
                 Task::none()
             }
-            Message::Auth(auth_msg) => {
-                self.handle_auth_messages(auth_msg)
-            }
-            Message::Org(OrgMessage::InvitationsLoaded(Ok(invitations))) => {
-                if let Screen::OrgSelection(screen) = &mut self.app.screen {
-                    screen.invitations = invitations.clone();
-                    screen.loading = false;
-                }
-                Task::none()
-            }
-            Message::Org(OrgMessage::InvitationsLoaded(Err(err))) => {
-                if let Screen::OrgSelection(screen) = &mut self.app.screen {
-                    screen.loading = false;
-                }
-                Task::none()
-            }
+            Message::Auth(auth_msg) => self.handle_auth_messages(auth_msg),
+            Message::Org(org_msg) => self.handle_org_messages(org_msg),
             Message::Screen(ScreenMessage::OrgSelection(
                 msg @ screens::org_selection::Message::CreateOrgClicked,
             )) => {

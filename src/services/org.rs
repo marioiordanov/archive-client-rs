@@ -86,7 +86,11 @@ impl OrgService {
             .map_err(|_| OrgError::from(CommonServiceError::NetworkError))?
             .json::<RootFolderEntry>()
             .await
-            .map_err(|_| OrgError::from(CommonServiceError::InvalidResponse))
+            .map_err(|e| {
+                OrgError::from(CommonServiceError::InvalidResponse {
+                    reason: e.to_string(),
+                })
+            })
     }
 
     async fn find_root_folder(
@@ -109,7 +113,11 @@ impl OrgService {
             .map_err(|_| OrgError::from(CommonServiceError::NetworkError))?
             .json::<RootFolderResponse>()
             .await
-            .map_err(|_| OrgError::from(CommonServiceError::InvalidResponse))?;
+            .map_err(|e| {
+                OrgError::from(CommonServiceError::InvalidResponse {
+                    reason: e.to_string(),
+                })
+            })?;
 
         if response.files.is_empty() {
             Err(OrgError::NoRootFolder)
