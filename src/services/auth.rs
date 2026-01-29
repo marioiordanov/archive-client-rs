@@ -60,7 +60,11 @@ impl AuthService {
             .unwrap()
             .email
     }
-    pub async fn refresh_access_token(refresh_token: &str) -> RefreshTokenResponse {
+
+    // TODO: remove unwraps
+    pub async fn refresh_access_token(
+        refresh_token: &str,
+    ) -> Result<RefreshTokenResponse, AuthError> {
         let body = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("client_id", &dotenvy::var("CLIENT_ID").unwrap())
             .append_pair("refresh_token", refresh_token)
@@ -79,7 +83,7 @@ impl AuthService {
             .await
             .unwrap();
 
-        response
+        Ok(response)
     }
     pub async fn get_drive_access_token() -> Result<AccessTokenResponse, AuthError> {
         Self::open_browser();

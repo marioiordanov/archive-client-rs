@@ -1,22 +1,45 @@
+use core::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::screens::{self};
-
 pub enum Screen {
     SignIn(screens::signin::SignInScreen),
     OrgSelection(screens::org_selection::OrgSelectionScreen),
-    ListFiles,
-    Syncing,
+}
+
+impl fmt::Display for Screen {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Screen::SignIn(_) => write!(f, "SignIn"),
+            Screen::OrgSelection(_) => write!(f, "OrgSelection"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum Intent {
+    FetchInvitations,
+    CreateOrg,
 }
 
 pub struct AppState {
     pub(crate) screen: Screen,
     pub(crate) session: SessionState,
     pub(crate) org: OrgState,
+
+    pub retry_intent: Option<Intent>,
 }
 
+impl AppState {
+    pub fn is_signed_in(&self) -> bool {
+        self.session.auth == AuthState::SignedIn
+    }
+}
+
+#[derive(Default)]
 pub struct SessionState {
-    pub user: Option<UserProfile>,
+    pub user: UserProfile,
     pub role: Option<Role>,
     pub auth: AuthState,
 }
@@ -26,12 +49,14 @@ pub enum Role {
     User,
 }
 
+#[derive(Default, PartialEq, Eq)]
 pub enum AuthState {
+    #[default]
     SignedOut,
     SignedIn,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct UserProfile {
     pub email: String,
     pub access_token: String,
@@ -41,6 +66,7 @@ pub struct UserProfile {
     pub token_type: String,
 }
 
+#[derive(Default)]
 pub struct OrgState {
     pub config: Option<OrgConfig>,
     pub status: OrgStatus,
@@ -51,7 +77,9 @@ pub struct OrgConfig {
     pub archive_folder_name: String, // cached display
 }
 
+#[derive(Default)]
 pub enum OrgStatus {
+    #[default]
     Unknown,
     Loading,
     Ready,

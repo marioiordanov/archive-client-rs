@@ -1,6 +1,9 @@
 use crate::{
     screens,
-    services::{auth::AccessTokenResponse, org::RootFolderEntry},
+    services::{
+        auth::{AccessTokenResponse, RefreshTokenResponse},
+        org::RootFolderEntry,
+    },
     ui_error::{UiError, UiErrorKind},
 };
 
@@ -28,7 +31,7 @@ pub enum OrgMessage {
 #[derive(Clone, Debug)]
 pub enum AuthMessage {
     AccessTokenReceived(Result<AccessTokenResponse, AuthError>),
-    TokenRefreshed(Result<String, AuthError>),
+    AccessTokenRefreshed(Result<RefreshTokenResponse, AuthError>),
     SignedOut,
 }
 
@@ -57,7 +60,7 @@ impl From<AuthError> for UiError {
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum CommonServiceError {
     #[error("Session expired")]
-    TokenExpired, // this to be moved to errors related to drive api service
+    TokenExpired,
 
     #[error("Permission denied")]
     PermissionDenied,
@@ -110,4 +113,34 @@ pub enum OrgError {
     NoRootFolder,
     #[error(transparent)]
     Common(#[from] CommonServiceError),
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum GlobalError {
+    #[error(transparent)]
+    AuthError(AuthError),
+    #[error(transparent)]
+    OrgError(OrgError),
+    #[error(transparent)]
+    Common(CommonServiceError),
+}
+
+impl From<AuthError> for GlobalError {
+    fn from(value: AuthError) -> Self {
+        if let AuthError::Common(e) = value {
+            GlobalError::Common(e)
+        } else {
+            GlobalError::AuthError(value)
+        }
+    }
+}
+
+impl From<OrgError> for GlobalError {
+    fn from(value: OrgError) -> Self {
+        if let OrgError::Common(e) = value {
+            GlobalError::Common(e)
+        } else {
+            GlobalError::OrgError(value)
+        }
+    }
 }

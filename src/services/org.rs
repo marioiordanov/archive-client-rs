@@ -31,6 +31,8 @@ impl OrgService {
 
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
+        return Err(OrgError::Common(CommonServiceError::TokenExpired));
+
         // Mock invitations - replace with actual API call
         Ok(vec![
             OrgInvitation {
