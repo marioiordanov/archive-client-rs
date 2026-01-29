@@ -1,6 +1,6 @@
 use crate::{
     screens,
-    services::auth::AccessTokenResponse,
+    services::{auth::AccessTokenResponse, org::RootFolderEntry},
     ui_error::{UiError, UiErrorKind},
 };
 
@@ -20,8 +20,9 @@ pub enum ScreenMessage {
 #[derive(Clone, Debug)]
 pub enum OrgMessage {
     InvitationsLoaded(Result<Vec<crate::app::state::OrgInvitation>, OrgError>),
-    OrgCreated(Result<String, OrgError>),
+    OrgCreated(Result<RootFolderEntry, OrgError>),
     OrgJoined(Result<(), OrgError>),
+    InviteSent(Result<(), OrgError>),
 }
 
 #[derive(Clone, Debug)]

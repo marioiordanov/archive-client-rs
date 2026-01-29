@@ -11,10 +11,10 @@ use crate::{
     constants::FILES_URL,
 };
 
-#[derive(Deserialize)]
-struct RootFolderEntry {
-    id: String,
-    name: String,
+#[derive(Deserialize, Debug, Clone)]
+pub struct RootFolderEntry {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Deserialize)]
@@ -51,7 +51,7 @@ impl OrgService {
     pub async fn get_or_create_organization(
         access_token: String,
         owner_email: String,
-    ) -> Result<String, OrgError> {
+    ) -> Result<RootFolderEntry, OrgError> {
         if let Ok(id) = OrgService::find_root_folder(&access_token, &owner_email).await {
             return Ok(id);
         }
@@ -85,10 +85,9 @@ impl OrgService {
             .json::<RootFolderEntry>()
             .await
             .map_err(|_| OrgError::from(CommonServiceError::InvalidResponse))
-            .map(|r| r.id)
     }
 
-    async fn find_root_folder(access_token: &str, owner_email: &str) -> Result<String, OrgError> {
+    async fn find_root_folder(access_token: &str, owner_email: &str) -> Result<RootFolderEntry, OrgError> {
         let mut url = Url::parse(FILES_URL).unwrap(); // safe, because it comes from a constant
         let query_string = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("fields", "files(id,name)")
@@ -114,34 +113,7 @@ impl OrgService {
                 .files
                 .into_iter()
                 .next()
-                .expect("Already checked it is non-empty")
-                .id)
+                .expect("Already checked it is non-empty"))
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use crate::services::org::OrgService;
-
-    const ACCESS_TOKEN: &str = "YOUR_ACCESS_TOKEN";
-
-    #[tokio::test]
-    async fn create_folder() {
-        OrgService::get_or_create_organization(ACCESS_TOKEN, "hueber9500@gmail.com").await;
-    }
-
-    #[tokio::test]
-    async fn find_file_by_query() {
-        println!(
-            "{:?}",
-            OrgService::find_root_folder(ACCESS_TOKEN, "blabla").await
-        );
-
-        println!(
-            "{:?}",
-            OrgService::find_root_folder(ACCESS_TOKEN, "hueber9500@gmail.com").await
-        );
     }
 }

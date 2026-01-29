@@ -100,7 +100,7 @@ impl ArchiveClient {
                     if let Some(user) = self.app.session.user.as_ref() {
                         Task::perform(
                             OrgService::get_or_create_organization(user.access_token.clone(), user.email.clone()),
-                            |organisation_id| Message::Org(OrgMessage::OrgCreated(organisation_id)),
+                            |organisation| Message::Org(OrgMessage::OrgCreated(organisation)),
                         )
                     } else {
                         Task::done(Message::Screen(app::message::ScreenMessage::Login(
