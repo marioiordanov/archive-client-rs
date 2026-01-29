@@ -71,18 +71,18 @@ impl AuthService {
             .append_pair("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
             .finish();
 
-        let response: RefreshTokenResponse = reqwest::Client::new()
+        reqwest::Client::new()
             .post(Url::from_str(TOKEN_URL).unwrap())
             .body(body.clone())
             .header("Content-Type", "application/x-www-form-urlencoded")
             .send()
             .await
-            .unwrap()
-            .json()
+            .map_err(|e| CommonServiceError::from(e))?
+            .error_for_status()
+            .map_err(|e| CommonServiceError::from(e))?
+            .json::<RefreshTokenResponse>()
             .await
-            .unwrap();
-
-        Ok(response)
+            .map_err(|e| CommonServiceError::from(e).into())
     }
     pub async fn get_drive_access_token() -> Result<AccessTokenResponse, AuthError> {
         Self::open_browser();
@@ -112,14 +112,12 @@ impl AuthService {
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .send()
                     .await
-                    .map_err(|_| AuthError::from(CommonServiceError::NetworkError))?
+                    .map_err(|e| CommonServiceError::from(e))?
+                    .error_for_status()
+                    .map_err(|e| CommonServiceError::from(e))?
                     .json::<AccessTokenResponse>()
                     .await
-                    .map_err(|e| {
-                        AuthError::from(CommonServiceError::InvalidResponse {
-                            reason: e.to_string(),
-                        })
-                    });
+                    .map_err(|e| CommonServiceError::from(e).into());
             }
         }
 

@@ -10,7 +10,7 @@ use crate::{
         state::{AuthState, Intent, Screen, SessionState, UserProfile},
     },
     screens::{self, signin::SignInScreen},
-    services::{self, auth::AuthService, org::OrgService, user::UserService},
+    services::{self, auth::AuthService, local_storage::LocalStorageService, org::OrgService},
 };
 
 impl ArchiveClient {
@@ -72,13 +72,25 @@ impl ArchiveClient {
                 }
                 Task::none()
             }
+            OrgMessage::OrgCreated(Ok(root_folder_entry)) => {
+                self.app.org.status = app::state::OrgStatus::Ready;
+                self.app.org.config = app::state::OrgConfig {
+                    archive_folder_id: root_folder_entry.id,
+                    archive_folder_name: root_folder_entry.name,
+                };
+                LocalStorageService::save_object(
+                    &self.app.org,
+                    services::local_storage::ObjectType::Org,
+                );
+
+                Task::none()
+            }
+            OrgMessage::OrgJoined(Ok(_)) => todo!(),
+            OrgMessage::InviteSent(Ok(_)) => todo!(),
             OrgMessage::OrgJoined(Err(e))
             | OrgMessage::InviteSent(Err(e))
             | OrgMessage::InvitationsLoaded(Err(e))
             | OrgMessage::OrgCreated(Err(e)) => self.handle_error(e.into()),
-            OrgMessage::OrgCreated(root_folder_entry) => todo!(),
-            OrgMessage::OrgJoined(Ok(_)) => todo!(),
-            OrgMessage::InviteSent(Ok(_)) => todo!(),
         }
     }
 
@@ -95,7 +107,10 @@ impl ArchiveClient {
                     .as_secs()
                     + refreshed_token.expires_in;
 
-                UserService::save_user_profile(&self.app.session.user);
+                LocalStorageService::save_object(
+                    &self.app.session.user,
+                    services::local_storage::ObjectType::UserProfile,
+                );
 
                 if let Some(intent) = self.app.retry_intent {
                     self.run_intent(intent)
@@ -133,7 +148,10 @@ impl ArchiveClient {
                     access_token: access_token.access_token,
                 };
 
-                UserService::save_user_profile(&user_profile);
+                LocalStorageService::save_object(
+                    &user_profile,
+                    services::local_storage::ObjectType::UserProfile,
+                );
 
                 self.app.session.user = user_profile;
                 self.app.session.auth = app::state::AuthState::SignedIn;
@@ -180,19 +198,15 @@ impl ArchiveClient {
             )) => {
                 if let Screen::OrgSelection(screen) = &mut self.app.screen {
                     screen.update(msg.clone());
-                    if self.app.is_signed_in() {
-                        Task::perform(
-                            OrgService::get_or_create_organization(
-                                self.app.session.user.access_token.clone(),
-                                self.app.session.user.email.clone(),
-                            ),
-                            |organisation| Message::Org(OrgMessage::OrgCreated(organisation)),
-                        )
-                    } else {
-                        Task::done(Message::Screen(app::message::ScreenMessage::Login(
-                            screens::signin::Message::SignInClicked,
-                        )))
-                    }
+                    self.app.retry_intent = Some(Intent::CreateOrg);
+
+                    Task::perform(
+                        OrgService::get_or_create_organization(
+                            self.app.session.user.access_token.clone(),
+                            self.app.session.user.email.clone(),
+                        ),
+                        |organisation| Message::Org(OrgMessage::OrgCreated(organisation)),
+                    )
                 } else {
                     Task::none()
                 }

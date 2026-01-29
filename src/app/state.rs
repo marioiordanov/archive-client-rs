@@ -35,6 +35,10 @@ impl AppState {
     pub fn is_signed_in(&self) -> bool {
         self.session.auth == AuthState::SignedIn
     }
+
+    pub fn is_org_created(&self) -> bool {
+        self.org.status == OrgStatus::Ready
+    }
 }
 
 #[derive(Default)]
@@ -66,18 +70,19 @@ pub struct UserProfile {
     pub token_type: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct OrgState {
-    pub config: Option<OrgConfig>,
+    pub config: OrgConfig,
     pub status: OrgStatus,
 }
 
+#[derive(Default, Serialize, Deserialize)]
 pub struct OrgConfig {
     pub archive_folder_id: String,   // Drive folder ID (source of truth)
     pub archive_folder_name: String, // cached display
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrgStatus {
     #[default]
     Unknown,

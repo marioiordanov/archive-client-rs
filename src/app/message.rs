@@ -1,3 +1,5 @@
+use hyper::StatusCode;
+
 use crate::{
     screens,
     services::{
@@ -103,6 +105,35 @@ impl From<CommonServiceError> for UiError {
                 detail: Some(reason),
                 kind: UiErrorKind::Error,
             },
+        }
+    }
+}
+
+impl From<reqwest::Error> for CommonServiceError {
+    fn from(e: reqwest::Error) -> Self {
+        // If the error is associated with an HTTP status, classify it first.
+        if let Some(status) = e.status() {
+            return match status {
+                StatusCode::UNAUTHORIZED => CommonServiceError::TokenExpired,
+                // If you have a more specific variant (e.g., PermissionDenied), map it here.
+                StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::BAD_REQUEST => {
+                    CommonServiceError::PermissionDenied
+                }
+
+                _ => CommonServiceError::InvalidResponse {
+                    reason: format!("Contact the developer"),
+                },
+            };
+        }
+
+        // Transport-ish failures (no HTTP status available)
+        if e.is_timeout() || e.is_connect() || e.is_request() {
+            return CommonServiceError::NetworkError;
+        }
+
+        // Response decode/body issues, etc.
+        CommonServiceError::InvalidResponse {
+            reason: e.to_string(),
         }
     }
 }

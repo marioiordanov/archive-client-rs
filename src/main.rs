@@ -9,9 +9,9 @@ mod ui_error;
 use crate::{
     app::{
         message::{Message, OrgMessage},
-        state::{AppState, SessionState},
+        state::{AppState, SessionState, UserProfile},
     },
-    services::{org::OrgService, user::UserService},
+    services::{local_storage::LocalStorageService, org::OrgService},
 };
 
 fn main() -> iced::Result {
@@ -38,7 +38,9 @@ impl ArchiveClient {
     fn boot() -> (Self, Task<Message>) {
         println!("Starting Archive Client...");
 
-        let (app, task) = if let Some(profile) = UserService::load_user_profile() {
+        let (app, task) = if let Some(profile) = LocalStorageService::load_object::<UserProfile>(
+            services::local_storage::ObjectType::UserProfile,
+        ) {
             let email = profile.email.clone();
             let app = AppState {
                 screen: app::state::Screen::OrgSelection(

@@ -29,25 +29,33 @@ impl OrgService {
         // TODO: Make API call to backend to fetch invitations
         // For now, simulate network delay and return mock data
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        return Err(OrgError::Common(CommonServiceError::TokenExpired));
+        // MVP: enable mock data when developing UI flows.
+        // Disable with: --no-default-features (or remove feature when backend is ready).
+        #[cfg(feature = "mock_org")]
+        {
+            return Ok(vec![
+                OrgInvitation {
+                    org_id: "1k66jRNSZcyTzLkeTOoKBhpG7amBpffyV".to_string(),
+                    org_name: "TESTING".to_string(),
+                    invited_by: "mario.iordanov1995@gmail.com".to_string(),
+                    invited_at: 1234567890,
+                },
+                OrgInvitation {
+                    org_id: "org_456".to_string(),
+                    org_name: "Tech Startup Inc".to_string(),
+                    invited_by: "malicious@owner.com".to_string(),
+                    invited_at: 1234567891,
+                },
+            ]);
+        }
 
-        // Mock invitations - replace with actual API call
-        Ok(vec![
-            OrgInvitation {
-                org_id: "org_123".to_string(),
-                org_name: "Acme Corp".to_string(),
-                invited_by: "admin@acme.com".to_string(),
-                invited_at: 1234567890,
-            },
-            OrgInvitation {
-                org_id: "org_456".to_string(),
-                org_name: "Tech Startup Inc".to_string(),
-                invited_by: "founder@techstartup.com".to_string(),
-                invited_at: 1234567891,
-            },
-        ])
+        #[cfg(not(feature = "mock_org"))]
+        {
+            // TODO: real backend call
+            Err(OrgError::Common(CommonServiceError::TokenExpired))
+        }
     }
 
     pub async fn get_or_create_organization(
@@ -83,14 +91,12 @@ impl OrgService {
             })
             .send()
             .await
-            .map_err(|_| OrgError::from(CommonServiceError::NetworkError))?
+            .map_err(|e| CommonServiceError::from(e))?
+            .error_for_status()
+            .map_err(|e| CommonServiceError::from(e))?
             .json::<RootFolderEntry>()
             .await
-            .map_err(|e| {
-                OrgError::from(CommonServiceError::InvalidResponse {
-                    reason: e.to_string(),
-                })
-            })
+            .map_err(|e| CommonServiceError::from(e).into())
     }
 
     async fn find_root_folder(
@@ -110,7 +116,9 @@ impl OrgService {
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|_| OrgError::from(CommonServiceError::NetworkError))?
+            .map_err(|e| CommonServiceError::from(e))?
+            .error_for_status()
+            .map_err(|e| CommonServiceError::from(e))?
             .json::<RootFolderResponse>()
             .await
             .map_err(|e| {
