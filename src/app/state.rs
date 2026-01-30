@@ -95,5 +95,4 @@ pub struct OrgInvitation {
     pub org_id: String,
     pub org_name: String,
     pub invited_by: String,
-    pub invited_at: u64,
 }

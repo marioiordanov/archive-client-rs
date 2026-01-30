@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use hyper::header::CONTENT_TYPE;
-use reqwest::{ClientBuilder, RequestBuilder};
+use reqwest::RequestBuilder;
 use serde::{Serialize, de::DeserializeOwned};
 use url::Url;
 
@@ -75,15 +75,15 @@ impl<TRequest: Serialize> HttpService<TRequest> {
         client
     }
 
-    pub async fn post<TResponse:DeserializeOwned>(self) -> Result<TResponse, CommonServiceError> {
+    pub async fn post<TResponse: DeserializeOwned>(self) -> Result<TResponse, CommonServiceError> {
         self.send::<TResponse>("post").await
     }
 
-    pub async fn post_no_response(self)-> Result<(), CommonServiceError> {
+    pub async fn post_no_response(self) -> Result<(), CommonServiceError> {
         self.send_no_response("post").await
     }
 
-    pub async fn get<TResponse:DeserializeOwned>(self) -> Result<TResponse, CommonServiceError> {
+    pub async fn get<TResponse: DeserializeOwned>(self) -> Result<TResponse, CommonServiceError> {
         self.send::<TResponse>("get").await
     }
 

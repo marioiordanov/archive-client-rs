@@ -86,39 +86,60 @@ impl OrgService {
         Ok(created_file)
     }
     pub async fn fetch_invitations(
-        _user_email: &str,
+        user_email: &str,
         access_token: &str,
     ) -> Result<Vec<OrgInvitation>, OrgError> {
-        // HTTP
-        // .get(FILES_URL)
-        // .bearer_auth(access_token)
+        #[derive(Debug, Deserialize)]
+        pub struct SharedWithMeFile {
+            pub id: String,
+            pub name: String,
+            #[serde(rename = "sharingUser")]
+            pub sharing_user: SharingUser,
+        }
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        #[derive(Debug, Deserialize)]
+        pub struct SharingUser {
+            #[serde(rename = "emailAddress")]
+            pub email_address: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        pub struct SharedWithMeFilesResponse {
+            pub files: Vec<SharedWithMeFile>,
+        }
+
+        let orgs = HttpService::<()>::new(FILES_URL)
+        .auth(access_token)
+        .query(&format!("q=sharedWithMe=true and trashed=false and mimeType='application/vnd.google-apps.folder' and appProperties has {{ key='application' and value='archive-client' }} and appProperties has {{ key='user' and value='{user_email}' }} "))
+        .query("fields=files(id,name,appProperties,sharingUser(emailAddress),sharedWithMeTime)")
+        .get::<SharedWithMeFilesResponse>()
+        .await?.files.into_iter().map(|s| OrgInvitation{ org_id: s.id, org_name: s.name, invited_by: s.sharing_user.email_address })
+        .collect::<Vec<OrgInvitation>>();
 
         // MVP: enable mock data when developing UI flows.
         // Disable with: --no-default-features (or remove feature when backend is ready).
         #[cfg(feature = "mock_org")]
         {
-            return Ok(vec![
+            let mut result = vec![
                 OrgInvitation {
                     org_id: "1k66jRNSZcyTzLkeTOoKBhpG7amBpffyV".to_string(),
                     org_name: "TESTING".to_string(),
                     invited_by: "hueber9500@gmail.com".to_string(),
-                    invited_at: 1234567890,
                 },
                 OrgInvitation {
                     org_id: "org_456".to_string(),
                     org_name: "Tech Startup Inc".to_string(),
                     invited_by: "malicious@owner.com".to_string(),
-                    invited_at: 1234567891,
                 },
-            ]);
+            ];
+            result.extend_from_slice(&orgs);
+            Ok(result)
         }
 
         #[cfg(not(feature = "mock_org"))]
         {
             // TODO: real backend call
-            Err(OrgError::Common(CommonServiceError::TokenExpired))
+            Ok(orgs)
         }
     }
 
@@ -187,43 +208,3 @@ impl OrgService {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use crate::services::org::OrgService;
-
-    const OWNER_TOKEN: &str = "OWNER_TOKEN";
-    const USER_TOKEN: &str = "USER_TOKEN";
-
-    #[tokio::test]
-    async fn invite_to_org() {
-        let r = OrgService::invite_user(
-            "mario.iordanov1995@gmail.com",
-            "1k66jRNSZcyTzLkeTOoKBhpG7amBpffyV",
-            OWNER_TOKEN,
-        )
-        .await;
-
-        println!("{:?}", r);
-
-        //02973853860331522686
-        //02973853860331522686
-    }
-}
-
-// curl -sS -G 'https://www.googleapis.com/drive/v3/files' \
-//   -H "Authorization: Bearer " \
-//   --data-urlencode "q=sharedWithMe=true and trashed=false and mimeType='application/vnd.google-apps.folder' and appProperties has { key='application' and value='archive-client' }" \
-//   --data-urlencode "fields=files(id,name,appProperties,sharingUser(emailAddress),sharedWithMeTime)"
-
-// curl -sS -X POST "https://www.googleapis.com/drive/v3/files?fields=id,name" \
-//   -H "Authorization: Bearer ACCESS_TOKEN" \
-//   -H "Content-Type: application/json" \
-//   -d "{
-//     \"name\": \"test\",
-//     \"mimeType\": \"application/vnd.google-apps.folder\",
-//     \"parents\": [\"1k66jRNSZcyTzLkeTOoKBhpG7amBpffyV\"],
-//     \"permissions\": [{\"type\": \"user\", \"role\": \"writer\", \"email\": \"mario.iordanov1995@gmail.com\"}]
-//   }"
