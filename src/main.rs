@@ -62,10 +62,12 @@ impl ArchiveClient {
                 retry_intent: None,
             };
 
+            let access_token = app.session.user.access_token.clone();
+
             (
                 app,
                 Task::perform(
-                    async move { OrgService::fetch_invitations(email.as_str()).await },
+                    async move { OrgService::fetch_invitations(email.as_str(), &access_token).await },
                     |result| Message::Org(OrgMessage::InvitationsLoaded(result)),
                 ),
             )

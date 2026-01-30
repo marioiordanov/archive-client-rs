@@ -14,9 +14,9 @@ use crate::{
 };
 
 impl ArchiveClient {
-    fn fetch_invitations_task(user_email: String) -> Task<Message> {
+    fn fetch_invitations_task(user_email: String, access_token: String) -> Task<Message> {
         Task::perform(
-            async move { OrgService::fetch_invitations(&user_email).await },
+            async move { OrgService::fetch_invitations(&user_email, &access_token).await },
             |result| Message::Org(OrgMessage::InvitationsLoaded(result)),
         )
     }
@@ -31,7 +31,7 @@ impl ArchiveClient {
         match intent {
             Intent::FetchInvitations => {
                 let email = self.app.session.user.email.clone();
-                Self::fetch_invitations_task(email)
+                Self::fetch_invitations_task(email, self.app.session.user.access_token.clone())
             }
             Intent::CreateOrg => Task::perform(
                 OrgService::get_or_create_organization(
@@ -162,7 +162,7 @@ impl ArchiveClient {
                 self.app.retry_intent = Some(app::state::Intent::FetchInvitations);
 
                 // Fetch invitations for the user
-                Self::fetch_invitations_task(user_email)
+                Self::fetch_invitations_task(user_email, self.app.session.user.access_token.clone())
             }
         }
     }

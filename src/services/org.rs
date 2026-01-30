@@ -49,7 +49,7 @@ impl OrgService {
         access_token: &str,
     ) -> Result<RootFolderEntry, OrgError> {
         let mut map = HashMap::new();
-        map.insert("application", "archiveClientType");
+        map.insert("application", "archive-client");
         map.insert("user", user_email);
 
         let create_file_request = DriveFileRequest {
@@ -95,9 +95,13 @@ impl OrgService {
 
         Ok(created_file)
     }
-    pub async fn fetch_invitations(_user_email: &str) -> Result<Vec<OrgInvitation>, OrgError> {
-        // TODO: Make API call to backend to fetch invitations
-        // For now, simulate network delay and return mock data
+    pub async fn fetch_invitations(
+        _user_email: &str,
+        access_token: &str,
+    ) -> Result<Vec<OrgInvitation>, OrgError> {
+        // HTTP
+        // .get(FILES_URL)
+        // .bearer_auth(access_token)
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -109,7 +113,7 @@ impl OrgService {
                 OrgInvitation {
                     org_id: "1k66jRNSZcyTzLkeTOoKBhpG7amBpffyV".to_string(),
                     org_name: "TESTING".to_string(),
-                    invited_by: "mario.iordanov1995@gmail.com".to_string(),
+                    invited_by: "hueber9500@gmail.com".to_string(),
                     invited_at: 1234567890,
                 },
                 OrgInvitation {
