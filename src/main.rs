@@ -1,4 +1,5 @@
 use iced::{Element, Task};
+use lazy_static::lazy_static;
 
 mod app;
 mod constants;
@@ -13,6 +14,10 @@ use crate::{
     },
     services::{local_storage::LocalStorageService, org::OrgService},
 };
+
+lazy_static! {
+    static ref HTTP: reqwest::Client = reqwest::Client::new();
+}
 
 fn main() -> iced::Result {
     env_logger::Builder::from_default_env()
@@ -37,6 +42,8 @@ struct ArchiveClient {
 impl ArchiveClient {
     fn boot() -> (Self, Task<Message>) {
         println!("Starting Archive Client...");
+
+        let client = reqwest::Client::new();
 
         let (app, task) = if let Some(profile) = LocalStorageService::load_object::<UserProfile>(
             services::local_storage::ObjectType::UserProfile,

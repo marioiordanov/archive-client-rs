@@ -48,7 +48,7 @@ impl AuthService {
         }
 
         let payload = parts[1];
-        let decoded = general_purpose::STANDARD.decode(payload).unwrap();
+        let decoded = general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap();
 
         #[derive(Deserialize)]
         struct IdTokenPayload {

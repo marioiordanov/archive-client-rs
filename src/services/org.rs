@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::{
+    HTTP,
     app::{
         message::{CommonServiceError, OrgError},
         state::OrgInvitation,
@@ -22,9 +23,78 @@ struct RootFolderResponse {
     files: Vec<RootFolderEntry>,
 }
 
+#[derive(Serialize)]
+struct DrivePermissionRequest<'a> {
+    r#type: &'a str,
+    role: &'a str,
+    #[serde(rename = "emailAddress")]
+    email_address: &'a str,
+}
+#[derive(Serialize)]
+struct DriveFileRequest<'a> {
+    name: &'a str,
+    #[serde(rename = "mimeType")]
+    mime_type: &'a str,
+    #[serde(rename = "appProperties")]
+    app_properties: HashMap<&'a str, &'a str>,
+    parents: Vec<&'a str>,
+}
+
 pub struct OrgService;
 
 impl OrgService {
+    pub async fn invite_user(
+        user_email: &str,
+        organization_id: &str,
+        access_token: &str,
+    ) -> Result<RootFolderEntry, OrgError> {
+        let mut map = HashMap::new();
+        map.insert("application", "archiveClientType");
+        map.insert("user", user_email);
+
+        let create_file_request = DriveFileRequest {
+            name: user_email,
+            mime_type: "application/vnd.google-apps.folder",
+            app_properties: map,
+            parents: vec![organization_id],
+        };
+
+        let created_file = HTTP
+            .post(FILES_URL)
+            .bearer_auth(access_token)
+            .json(&create_file_request)
+            .send()
+            .await
+            .map_err(|e| CommonServiceError::from(e))?
+            .error_for_status()
+            .map_err(|e| CommonServiceError::from(e))?
+            .json::<RootFolderEntry>()
+            .await
+            .map_err(|e| CommonServiceError::from(e))?;
+
+        let permissions_request = DrivePermissionRequest {
+            r#type: "user",
+            role: "writer",
+            email_address: user_email,
+        };
+
+        let mut permissions_url =
+            Url::from_str(format!("{FILES_URL}/{}/permissions", created_file.id).as_str()).unwrap();
+        permissions_url.set_query(Some("fields=id,role"));
+        permissions_url.set_query(Some("sendNotificationEmail=false"));
+
+        // TODO: fetch the id and role and save it somewhere
+        HTTP.post(permissions_url)
+            .bearer_auth(access_token)
+            .json(&permissions_request)
+            .send()
+            .await
+            .map_err(|e| CommonServiceError::from(e))?
+            .error_for_status()
+            .map_err(|e| CommonServiceError::from(e))?;
+
+        Ok(created_file)
+    }
     pub async fn fetch_invitations(_user_email: &str) -> Result<Vec<OrgInvitation>, OrgError> {
         // TODO: Make API call to backend to fetch invitations
         // For now, simulate network delay and return mock data
@@ -58,6 +128,7 @@ impl OrgService {
         }
     }
 
+    /// Organization is a root folder
     pub async fn get_or_create_organization(
         access_token: String,
         owner_email: String,
@@ -138,3 +209,43 @@ impl OrgService {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::services::org::OrgService;
+
+    const OWNER_TOKEN: &str = "OWNER_TOKEN";
+    const USER_TOKEN: &str = "USER_TOKEN";
+
+    #[tokio::test]
+    async fn invite_to_org() {
+        let r = OrgService::invite_user(
+            "mario.iordanov1995@gmail.com",
+            "1k66jRNSZcyTzLkeTOoKBhpG7amBpffyV",
+            OWNER_TOKEN,
+        )
+        .await;
+
+        println!("{:?}", r);
+
+        //02973853860331522686
+        //02973853860331522686
+    }
+}
+
+// curl -sS -G 'https://www.googleapis.com/drive/v3/files' \
+//   -H "Authorization: Bearer USER_TOKEN" \
+//   --data-urlencode "q=sharedWithMe=true and trashed=false and mimeType='application/vnd.google-apps.folder' and appProperties has { key='archiveClientType' and value='application' }" \
+//   --data-urlencode "fields=files(id,name,appProperties,sharingUser(emailAddress),sharedWithMeTime)"
+
+// curl -sS -X POST "https://www.googleapis.com/drive/v3/files?fields=id,name" \
+//   -H "Authorization: Bearer ACCESS_TOKEN" \
+//   -H "Content-Type: application/json" \
+//   -d "{
+//     \"name\": \"test\",
+//     \"mimeType\": \"application/vnd.google-apps.folder\",
+//     \"parents\": [\"1k66jRNSZcyTzLkeTOoKBhpG7amBpffyV\"],
+//     \"permissions\": [{\"type\": \"user\", \"role\": \"writer\", \"email\": \"mario.iordanov1995@gmail.com\"}]
+//   }"
