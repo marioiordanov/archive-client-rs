@@ -1,12 +1,13 @@
-use std::{any::type_name, str::FromStr};
+use std::{ str::FromStr};
 
+use hyper::header::CONTENT_TYPE;
 use reqwest::{ClientBuilder, RequestBuilder};
 use serde::{Serialize, de::DeserializeOwned};
 use url::Url;
 
 use crate::{HTTP, app::message::CommonServiceError};
 
-struct HttpService<TRequest: Serialize> {
+pub struct HttpService<TRequest: Serialize = ()> {
     url: Url,
     bearer_token: Option<String>,
     form_data: Vec<(String, String)>,
@@ -14,7 +15,7 @@ struct HttpService<TRequest: Serialize> {
 }
 
 impl<TRequest: Serialize> HttpService<TRequest> {
-    fn new(url_str: &str) -> Self {
+    pub fn new(url_str: &str) -> Self {
         Self {
             url: Url::from_str(url_str).unwrap(),
             bearer_token: None,
@@ -22,7 +23,7 @@ impl<TRequest: Serialize> HttpService<TRequest> {
             json_body: None,
         }
     }
-    fn query(&mut self, new_query: &str) -> &mut Self {
+    pub fn query(&mut self, new_query: &str) -> &mut Self {
         if let Some(query) = self.url.query() {
             self.url.set_query(Some(&format!("{query}&{new_query}")));
         } else {
@@ -32,8 +33,13 @@ impl<TRequest: Serialize> HttpService<TRequest> {
         self
     }
 
-    fn auth(&mut self, bearer_token: String) -> &mut Self {
-        self.bearer_token = Some(bearer_token);
+    pub fn form_data(&mut self, key:impl Into<String>, value: impl Into<String>) -> &mut Self {
+        self.form_data.push((key.into(), value.into()));
+        self
+    }
+
+    pub fn auth(&mut self, bearer_token: impl Into<String>) -> &mut Self {
+        self.bearer_token = Some(bearer_token.into());
         self
     }
 
@@ -42,20 +48,12 @@ impl<TRequest: Serialize> HttpService<TRequest> {
             "get" => HTTP.get(self.url),
             "post" => HTTP.post(self.url),
             "put" => HTTP.put(self.url),
-            _ => unimplemented!("HTTP METHOD"),
+            unimplemented_method => unimplemented!("{unimplemented_method}"),
         };
 
         if let Some(token) = self.bearer_token {
             client = client.bearer_auth(token);
         }
-
-        let content_type = if self.json_body.is_some() {
-            "application/json"
-        } else {
-            "application/x-www-form-urlencoded"
-        };
-
-        client = client.header("Content-Type", content_type);
 
         client = if let Some(json_request) = self.json_body {
             client.json(&json_request)
@@ -65,13 +63,14 @@ impl<TRequest: Serialize> HttpService<TRequest> {
                 body.append_pair(key, value);
             }
 
+            client = client.header(CONTENT_TYPE, "application/x-www-form-urlencoded");
             client.body(body.finish())
         };
 
         client
     }
 
-    async fn send<TResponse: DeserializeOwned>(
+    pub async fn send<TResponse: DeserializeOwned>(
         self,
         method: &str,
     ) -> Result<TResponse, CommonServiceError> {
@@ -87,7 +86,7 @@ impl<TRequest: Serialize> HttpService<TRequest> {
             .await
             .map_err(|e| CommonServiceError::from(e))
     }
-    async fn send_no_response(self, method: &str) -> Result<(), CommonServiceError> {
+    pub async fn send_no_response(self, method: &str) -> Result<(), CommonServiceError> {
         let request = self.build_client(method);
 
         request
@@ -97,26 +96,5 @@ impl<TRequest: Serialize> HttpService<TRequest> {
             .error_for_status()
             .map_err(|e| CommonServiceError::from(e))
             .map(|_| ())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::any::type_name;
-
-    use serde::{Serialize, de::DeserializeOwned};
-
-    use crate::{constants::FILES_URL, services::http::HttpService};
-
-    fn de<T: DeserializeOwned>(json_str: &str) -> T {
-        serde_json::from_str::<T>(json_str).unwrap()
-    }
-
-    fn check_type<T: DeserializeOwned>() {
-        println!("{}", type_name::<T>());
-    }
-    #[test]
-    fn x() {
-        check_type::<()>();
     }
 }
