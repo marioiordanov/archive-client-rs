@@ -1,4 +1,4 @@
-use std::{ str::FromStr};
+use std::str::FromStr;
 
 use hyper::header::CONTENT_TYPE;
 use reqwest::{ClientBuilder, RequestBuilder};
@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::{HTTP, app::message::CommonServiceError};
 
-pub struct HttpService<TRequest: Serialize = ()> {
+pub struct HttpService<TRequest: Serialize> {
     url: Url,
     bearer_token: Option<String>,
     form_data: Vec<(String, String)>,
@@ -23,7 +23,7 @@ impl<TRequest: Serialize> HttpService<TRequest> {
             json_body: None,
         }
     }
-    pub fn query(&mut self, new_query: &str) -> &mut Self {
+    pub fn query(mut self, new_query: &str) -> Self {
         if let Some(query) = self.url.query() {
             self.url.set_query(Some(&format!("{query}&{new_query}")));
         } else {
@@ -33,17 +33,22 @@ impl<TRequest: Serialize> HttpService<TRequest> {
         self
     }
 
-    pub fn form_data(&mut self, key:impl Into<String>, value: impl Into<String>) -> &mut Self {
+    pub fn form_data(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.form_data.push((key.into(), value.into()));
         self
     }
 
-    pub fn auth(&mut self, bearer_token: impl Into<String>) -> &mut Self {
+    pub fn auth(mut self, bearer_token: impl Into<String>) -> Self {
         self.bearer_token = Some(bearer_token.into());
         self
     }
 
-    fn build_client(self, method: &str) -> RequestBuilder {
+    pub fn json_body(mut self, json_obj: TRequest) -> Self {
+        self.json_body = Some(json_obj);
+        self
+    }
+
+    fn build_request(self, method: &str) -> RequestBuilder {
         let mut client = match method {
             "get" => HTTP.get(self.url),
             "post" => HTTP.post(self.url),
@@ -70,11 +75,23 @@ impl<TRequest: Serialize> HttpService<TRequest> {
         client
     }
 
-    pub async fn send<TResponse: DeserializeOwned>(
+    pub async fn post<TResponse:DeserializeOwned>(self) -> Result<TResponse, CommonServiceError> {
+        self.send::<TResponse>("post").await
+    }
+
+    pub async fn post_no_response(self)-> Result<(), CommonServiceError> {
+        self.send_no_response("post").await
+    }
+
+    pub async fn get<TResponse:DeserializeOwned>(self) -> Result<TResponse, CommonServiceError> {
+        self.send::<TResponse>("get").await
+    }
+
+    async fn send<TResponse: DeserializeOwned>(
         self,
         method: &str,
     ) -> Result<TResponse, CommonServiceError> {
-        let request = self.build_client(method);
+        let request = self.build_request(method);
 
         request
             .send()
@@ -86,8 +103,8 @@ impl<TRequest: Serialize> HttpService<TRequest> {
             .await
             .map_err(|e| CommonServiceError::from(e))
     }
-    pub async fn send_no_response(self, method: &str) -> Result<(), CommonServiceError> {
-        let request = self.build_client(method);
+    async fn send_no_response(self, method: &str) -> Result<(), CommonServiceError> {
+        let request = self.build_request(method);
 
         request
             .send()

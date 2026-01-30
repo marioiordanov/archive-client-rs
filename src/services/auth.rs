@@ -11,6 +11,7 @@ use url::Url;
 use crate::{
     app::message::{AuthError, CommonServiceError},
     constants::{AUTH_URL, REDIRECT_URI, TOKEN_URL},
+    services::http::HttpService,
 };
 
 const HTML_SUCCESSFUL_SIGN_IN: &[u8] = include_bytes!("../../sign-in-complete.html");
@@ -64,25 +65,14 @@ impl AuthService {
     pub async fn refresh_access_token(
         refresh_token: &str,
     ) -> Result<RefreshTokenResponse, AuthError> {
-        let body = url::form_urlencoded::Serializer::new(String::new())
-            .append_pair("client_id", &dotenvy::var("CLIENT_ID").unwrap())
-            .append_pair("refresh_token", refresh_token)
-            .append_pair("grant_type", "refresh_token")
-            .append_pair("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
-            .finish();
-
-        reqwest::Client::new()
-            .post(Url::from_str(TOKEN_URL).unwrap())
-            .body(body.clone())
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .send()
+        HttpService::<()>::new(TOKEN_URL)
+            .form_data("client_id", &dotenvy::var("CLIENT_ID").unwrap())
+            .form_data("refresh_token", refresh_token)
+            .form_data("grant_type", "refresh_token")
+            .form_data("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
+            .post::<RefreshTokenResponse>()
             .await
-            .map_err(|e| CommonServiceError::from(e))?
-            .error_for_status()
-            .map_err(|e| CommonServiceError::from(e))?
-            .json::<RefreshTokenResponse>()
-            .await
-            .map_err(|e| CommonServiceError::from(e).into())
+            .map_err(|e| e.into())
     }
     pub async fn get_drive_access_token() -> Result<AccessTokenResponse, AuthError> {
         Self::open_browser();
@@ -98,26 +88,15 @@ impl AuthService {
                 .collect();
 
             if let Some(code) = params.get("code") {
-                let body = url::form_urlencoded::Serializer::new(String::new())
-                    .append_pair("code", &code)
-                    .append_pair("client_id", &dotenvy::var("CLIENT_ID").unwrap())
-                    .append_pair("redirect_uri", REDIRECT_URI)
-                    .append_pair("grant_type", "authorization_code")
-                    .append_pair("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
-                    .finish();
-
-                return reqwest::Client::new()
-                    .post(Url::from_str(TOKEN_URL).unwrap())
-                    .body(body.clone())
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .send()
+                return HttpService::<()>::new(TOKEN_URL)
+                    .form_data("code", code)
+                    .form_data("client_id", &dotenvy::var("CLIENT_ID").unwrap())
+                    .form_data("redirect_uri", REDIRECT_URI)
+                    .form_data("grant_type", "authorization_code")
+                    .form_data("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
+                    .post::<AccessTokenResponse>()
                     .await
-                    .map_err(|e| CommonServiceError::from(e))?
-                    .error_for_status()
-                    .map_err(|e| CommonServiceError::from(e))?
-                    .json::<AccessTokenResponse>()
-                    .await
-                    .map_err(|e| CommonServiceError::from(e).into());
+                    .map_err(|e| AuthError::from(e));
             }
         }
 

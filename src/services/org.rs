@@ -10,6 +10,7 @@ use crate::{
         state::OrgInvitation,
     },
     constants::FILES_URL,
+    services::http::HttpService,
 };
 
 #[derive(Deserialize, Debug, Clone)]
@@ -59,18 +60,11 @@ impl OrgService {
             parents: vec![organization_id],
         };
 
-        let created_file = HTTP
-            .post(FILES_URL)
-            .bearer_auth(access_token)
-            .json(&create_file_request)
-            .send()
-            .await
-            .map_err(|e| CommonServiceError::from(e))?
-            .error_for_status()
-            .map_err(|e| CommonServiceError::from(e))?
-            .json::<RootFolderEntry>()
-            .await
-            .map_err(|e| CommonServiceError::from(e))?;
+        let created_file = HttpService::new(FILES_URL)
+            .auth(access_token)
+            .json_body(create_file_request)
+            .post::<RootFolderEntry>()
+            .await?;
 
         let permissions_request = DrivePermissionRequest {
             r#type: "user",
@@ -83,15 +77,11 @@ impl OrgService {
         permissions_url.set_query(Some("fields=id,role"));
         permissions_url.set_query(Some("sendNotificationEmail=false"));
 
-        // TODO: fetch the id and role and save it somewhere
-        HTTP.post(permissions_url)
-            .bearer_auth(access_token)
-            .json(&permissions_request)
-            .send()
-            .await
-            .map_err(|e| CommonServiceError::from(e))?
-            .error_for_status()
-            .map_err(|e| CommonServiceError::from(e))?;
+        HttpService::new(permissions_url.as_str())
+            .auth(access_token)
+            .json_body(permissions_request)
+            .post_no_response()
+            .await?;
 
         Ok(created_file)
     }
@@ -156,22 +146,16 @@ impl OrgService {
         map.insert("archiveClientType", "application");
         map.insert("orgId", &owner_email);
 
-        reqwest::Client::new()
-            .post(url)
-            .bearer_auth(access_token)
-            .json(&Request {
+        HttpService::new(FILES_URL)
+            .auth(access_token)
+            .json_body(Request {
                 name: "archive-client-org",
                 mime_type: "application/vnd.google-apps.folder",
                 app_properties: map,
             })
-            .send()
+            .post::<RootFolderEntry>()
             .await
-            .map_err(|e| CommonServiceError::from(e))?
-            .error_for_status()
-            .map_err(|e| CommonServiceError::from(e))?
-            .json::<RootFolderEntry>()
-            .await
-            .map_err(|e| CommonServiceError::from(e).into())
+            .map_err(|e| e.into())
     }
 
     async fn find_root_folder(
@@ -186,21 +170,11 @@ impl OrgService {
 
         url.set_query(Some(&query_string));
 
-        let response = reqwest::Client::new()
-            .get(url)
-            .bearer_auth(access_token)
-            .send()
-            .await
-            .map_err(|e| CommonServiceError::from(e))?
-            .error_for_status()
-            .map_err(|e| CommonServiceError::from(e))?
-            .json::<RootFolderResponse>()
-            .await
-            .map_err(|e| {
-                OrgError::from(CommonServiceError::InvalidResponse {
-                    reason: e.to_string(),
-                })
-            })?;
+        let response = HttpService::<()>::new(FILES_URL)
+        .query("fields=files(id,name)")
+        .query(&format!("q=mimeType='application/vnd.google-apps.folder' and appProperties has {{ key='archiveClientType' and value='application' }} and appProperties has {{ key='orgId' and value='{owner_email}' }} "))
+        .auth(access_token)
+        .get::<RootFolderResponse>().await?;
 
         if response.files.is_empty() {
             Err(OrgError::NoRootFolder)
@@ -240,8 +214,8 @@ mod tests {
 }
 
 // curl -sS -G 'https://www.googleapis.com/drive/v3/files' \
-//   -H "Authorization: Bearer USER_TOKEN" \
-//   --data-urlencode "q=sharedWithMe=true and trashed=false and mimeType='application/vnd.google-apps.folder' and appProperties has { key='archiveClientType' and value='application' }" \
+//   -H "Authorization: Bearer " \
+//   --data-urlencode "q=sharedWithMe=true and trashed=false and mimeType='application/vnd.google-apps.folder' and appProperties has { key='application' and value='archive-client' }" \
 //   --data-urlencode "fields=files(id,name,appProperties,sharingUser(emailAddress),sharedWithMeTime)"
 
 // curl -sS -X POST "https://www.googleapis.com/drive/v3/files?fields=id,name" \
