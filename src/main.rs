@@ -10,7 +10,7 @@ mod ui_error;
 use crate::{
     app::{
         message::{Message, OrgMessage},
-        state::{AppState, SessionState, UserProfile},
+        state::{AppState, Intent, SessionState, UserProfile},
     },
     services::{local_storage::LocalStorageService, org::OrgService},
 };
@@ -57,17 +57,14 @@ impl ArchiveClient {
                     auth: app::state::AuthState::SignedIn,
                 },
                 org: Default::default(),
-                retry_intent: None,
+                retry_intent: Some(Intent::FetchInvitations),
             };
 
             let access_token = app.session.user.access_token.clone();
 
             (
                 app,
-                Task::perform(
-                    async move { OrgService::fetch_invitations(email.as_str(), &access_token).await },
-                    |result| Message::Org(OrgMessage::InvitationsLoaded(result)),
-                ),
+                ArchiveClient::fetch_invitations_task(email, access_token),
             )
         } else {
             let app = AppState {

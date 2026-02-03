@@ -14,7 +14,7 @@ use crate::{
 };
 
 impl ArchiveClient {
-    fn fetch_invitations_task(user_email: String, access_token: String) -> Task<Message> {
+    pub fn fetch_invitations_task(user_email: String, access_token: String) -> Task<Message> {
         Task::perform(
             async move { OrgService::fetch_invitations(&user_email, &access_token).await },
             |result| Message::Org(OrgMessage::InvitationsLoaded(result)),
