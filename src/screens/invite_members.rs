@@ -3,9 +3,9 @@ use std::collections::VecDeque;
 use iced::Alignment::Center;
 use iced::alignment::Horizontal::Left;
 use iced::alignment::{Horizontal, Vertical};
-use iced::widget::{button, column, container, row, scrollable, text, text_editor, tooltip};
 use iced::widget::table;
-use iced::{Alignment, Border, Element, Length, Theme};
+use iced::widget::{button, column, container, row, scrollable, text, text_editor, tooltip};
+use iced::{Alignment, Border, Color, Element, Length, Theme};
 
 use crate::app::message::ScreenMessage;
 
@@ -183,7 +183,16 @@ impl InviteMembersScreen {
 
         let mut editor_widget = text_editor(&self.editor)
             .placeholder("alice@example.com\nbob@example.com")
-            .height(Length::Fill);
+            .height(Length::Fill)
+            .style(|theme, status| {
+                let mut style = text_editor::default(theme, status);
+                style.border = Border {
+                    width: 0.0,
+                    color: Color::TRANSPARENT,
+                    radius: 0.0.into(),
+                };
+                style
+        });
 
         // If on_action is not set, the text editor is disabled.
         if !self.sending {
@@ -201,22 +210,31 @@ impl InviteMembersScreen {
             send_button = send_button.on_press(Message::SendInvitesClicked);
         }
 
-        let continue_enabled = self.can_continue();
         let mut continue_button = button("Continue").padding(12);
-        if continue_enabled {
-            continue_button = continue_button.on_press(Message::ContinueClicked);
-        }
 
-        let hint: Element<Message> = if let Some(hint) = self.continue_hint() {
-            text(hint).size(12).into()
+        let continue_enabled = self.can_continue();
+        let hint_text = self.continue_hint().unwrap_or_default();
+
+        let continue_with_tooltip = if continue_enabled {
+            continue_button = continue_button.on_press(Message::ContinueClicked);
+
+            tooltip(
+                continue_button,
+                container(text(hint_text)).padding(0),
+                tooltip::Position::Top,
+            )
         } else {
-            text("").into()
+            tooltip(
+                continue_button,
+                container(text(hint_text).size(11))
+                    .padding(10)
+                    .style(container::rounded_box),
+                tooltip::Position::Top,
+            )
         };
 
         let current: Element<Message> = if let Some(email) = &self.current_email {
-            text(format!("Currently sending: {email}"))
-                .size(12)
-                .into()
+            text(format!("Currently sending: {email}")).size(12).into()
         } else {
             text("").into()
         };
@@ -242,18 +260,15 @@ impl InviteMembersScreen {
         let left = column![
             text("Invitees").size(18),
             editor_panel,
-            row![send_button].spacing(10),
+            row![send_button, continue_with_tooltip].spacing(10),
             current,
         ]
         .spacing(12)
         .width(Length::Fill);
 
-        let right = column![
-            text("History").size(18),
-            history_table,
-        ]
-        .spacing(12)
-        .width(Length::Fill);
+        let right = column![text("History").size(18), history_table,]
+            .spacing(12)
+            .width(Length::Fill);
 
         let main = row![
             container(left).width(Length::FillPortion(2)),
@@ -267,9 +282,7 @@ impl InviteMembersScreen {
             title.width(Length::Fill).align_x(Left),
             subtitle.width(Length::Fill).align_x(Left),
             main,
-            row![continue_button].spacing(10),
-            hint,
-
+            //row![continue_with_tooltip].spacing(10),
         ]
         .spacing(12)
         .align_x(Alignment::Center);
