@@ -36,6 +36,39 @@ impl ArchiveClient {
             },
         )
     }
+
+    fn load_dashboard_task(org_id: String, access_token: String) -> Task<Message> {
+        Task::perform(
+            async move { OrgService::load_dashboard(&org_id, &access_token).await },
+            |result| Message::Org(OrgMessage::DashboardLoaded(result)),
+        )
+    }
+
+    fn revoke_permission_task(
+        folder_id: String,
+        email: String,
+        permission_id: Option<String>,
+        access_token: String,
+    ) -> Task<Message> {
+        let folder_id_for_async = folder_id.clone();
+        Task::perform(
+            async move {
+                OrgService::revoke_user_folder_permission(
+                    &folder_id_for_async,
+                    &email,
+                    permission_id.as_deref(),
+                    &access_token,
+                )
+                .await
+            },
+            move |result| {
+                Message::Org(OrgMessage::PermissionRevoked {
+                    folder_id,
+                    result,
+                })
+            },
+        )
+    }
 }
 
 impl ArchiveClient {
@@ -130,6 +163,7 @@ impl ArchiveClient {
                             email,
                             screens::invite_members::InviteStatus::Sent,
                         ),
+                        // TODO: on unsuccessful invitation, delete the user folder from the root folder in DRIVE
                         Err(e) => screen.push_history(
                             run_id,
                             email,
@@ -149,10 +183,52 @@ impl ArchiveClient {
 
                 Task::none()
             }
+            OrgMessage::DashboardLoaded(Ok(rows)) => {
+                if let Screen::OrgDashboard(screen) = &mut self.app.screen {
+                    let screen_rows = rows
+                        .into_iter()
+                        .map(|r| screens::org_dashboard::DashboardRow {
+                            email: r.email,
+                            folder_id: r.folder_id,
+                            active: r.active,
+                            permission_id: r.permission_id,
+                            removing: false,
+                        })
+                        .collect();
+
+                    screen.set_rows(screen_rows);
+                }
+
+                Task::none()
+            }
+            OrgMessage::PermissionRevoked {
+                folder_id,
+                result,
+            } => {
+                if let Screen::OrgDashboard(screen) = &mut self.app.screen {
+                    screen.set_removing(&folder_id, false);
+
+                    match result {
+                        Ok(()) => {
+                            if let Some(row) =
+                                screen.rows.iter_mut().find(|r| r.folder_id == folder_id)
+                            {
+                                row.permission_id = None;
+                            }
+                        }
+                        Err(e) => {
+                            screen.set_error(e.to_string());
+                        }
+                    }
+                }
+
+                Task::none()
+            }
             OrgMessage::OrgJoined(Err(e))
             | OrgMessage::InviteSent(Err(e))
             | OrgMessage::InvitationsLoaded(Err(e))
-            | OrgMessage::OrgCreated(Err(e)) => self.handle_error(e.into()),
+            | OrgMessage::OrgCreated(Err(e))
+            | OrgMessage::DashboardLoaded(Err(e)) => self.handle_error(e.into()),
         }
     }
 
@@ -315,12 +391,45 @@ impl ArchiveClient {
                         return Task::none();
                     }
 
-                    self.app.screen =
-                        Screen::OrgSelection(screens::org_selection::OrgSelectionScreen::new());
+                    let org_id = self.app.org.config.archive_folder_id.clone();
+                    self.app.screen = Screen::OrgDashboard(
+                        screens::org_dashboard::OrgDashboardScreen::new(org_id.clone()),
+                    );
 
-                    let email = self.app.session.user.email.clone();
                     let access_token = self.app.session.user.access_token.clone();
-                    Self::fetch_invitations_task(email, access_token)
+                    Self::load_dashboard_task(org_id, access_token)
+                }
+            },
+
+            Message::Screen(ScreenMessage::OrgDashboard(msg)) => match msg {
+                screens::org_dashboard::Message::RefreshClicked => {
+                    if let Screen::OrgDashboard(screen) = &mut self.app.screen {
+                        screen.loading = true;
+                        screen.error = None;
+                        let org_id = screen.org_id.clone();
+                        let access_token = self.app.session.user.access_token.clone();
+                        return Self::load_dashboard_task(org_id, access_token);
+                    }
+
+                    Task::none()
+                }
+                screens::org_dashboard::Message::RemoveAccessClicked {
+                    email,
+                    folder_id,
+                    permission_id,
+                } => {
+                    if let Screen::OrgDashboard(screen) = &mut self.app.screen {
+                        screen.set_removing(&folder_id, true);
+                        let access_token = self.app.session.user.access_token.clone();
+                        return Self::revoke_permission_task(
+                            folder_id,
+                            email,
+                            permission_id,
+                            access_token,
+                        );
+                    }
+
+                    Task::none()
                 }
             },
         }

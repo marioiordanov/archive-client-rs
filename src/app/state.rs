@@ -7,6 +7,7 @@ pub enum Screen {
     SignIn(screens::signin::SignInScreen),
     OrgSelection(screens::org_selection::OrgSelectionScreen),
     InviteMembers(screens::invite_members::InviteMembersScreen),
+    OrgDashboard(screens::org_dashboard::OrgDashboardScreen),
 }
 
 impl fmt::Display for Screen {
@@ -15,6 +16,7 @@ impl fmt::Display for Screen {
             Screen::SignIn(_) => write!(f, "SignIn"),
             Screen::OrgSelection(_) => write!(f, "OrgSelection"),
             Screen::InviteMembers(_) => write!(f, "InviteMembers"),
+            Screen::OrgDashboard(_) => write!(f, "OrgDashboard"),
         }
     }
 }

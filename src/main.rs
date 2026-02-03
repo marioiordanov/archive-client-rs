@@ -91,6 +91,9 @@ impl ArchiveClient {
             app::state::Screen::InviteMembers(screen) => {
                 screen.view().map(|m| Message::Screen(m.into()))
             }
+            app::state::Screen::OrgDashboard(screen) => {
+                screen.view().map(|m| Message::Screen(m.into()))
+            }
         };
 
         contents.into()

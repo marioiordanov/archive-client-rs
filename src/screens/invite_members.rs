@@ -1,7 +1,5 @@
 use std::collections::VecDeque;
 
-use iced::Alignment::Center;
-use iced::alignment::Horizontal::Left;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::table;
 use iced::widget::{button, column, container, row, scrollable, text, text_editor, tooltip};
@@ -192,7 +190,7 @@ impl InviteMembersScreen {
                     radius: 0.0.into(),
                 };
                 style
-        });
+            });
 
         // If on_action is not set, the text editor is disabled.
         if !self.sending {
@@ -279,8 +277,8 @@ impl InviteMembersScreen {
         .align_y(Alignment::Start);
 
         let content = column![
-            title.width(Length::Fill).align_x(Left),
-            subtitle.width(Length::Fill).align_x(Left),
+            title.width(Length::Fill).align_x(Horizontal::Left),
+            subtitle.width(Length::Fill).align_x(Horizontal::Left),
             main,
             //row![continue_with_tooltip].spacing(10),
         ]

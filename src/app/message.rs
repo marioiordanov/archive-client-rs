@@ -4,7 +4,7 @@ use crate::{
     screens,
     services::{
         auth::{AccessTokenResponse, RefreshTokenResponse},
-        org::RootFolderEntry,
+        org::{DashboardRowData, RootFolderEntry},
     },
     ui_error::{UiError, UiErrorKind},
 };
@@ -21,6 +21,7 @@ pub enum ScreenMessage {
     Login(screens::signin::Message),
     OrgSelection(screens::org_selection::Message),
     InviteMembers(screens::invite_members::Message),
+    OrgDashboard(screens::org_dashboard::Message),
 }
 
 #[derive(Clone, Debug)]
@@ -32,6 +33,11 @@ pub enum OrgMessage {
     InviteUserFinished {
         run_id: u64,
         email: String,
+        result: Result<(), OrgError>,
+    },
+    DashboardLoaded(Result<Vec<DashboardRowData>, OrgError>),
+    PermissionRevoked {
+        folder_id: String,
         result: Result<(), OrgError>,
     },
 }

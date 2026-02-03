@@ -4,14 +4,19 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::{
-    HTTP,
     app::{
-        message::{CommonServiceError, OrgError},
+        message::OrgError,
         state::OrgInvitation,
     },
     constants::FILES_URL,
     services::http::HttpService,
 };
+
+#[derive(Debug, Clone)]
+struct UserFolderEntry {
+    folder_id: String,
+    email: String,
+}
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct RootFolderEntry {
@@ -43,7 +48,64 @@ struct DriveFileRequest<'a> {
 
 pub struct OrgService;
 
+#[derive(Debug, Clone)]
+pub struct DashboardRowData {
+    pub email: String,
+    pub folder_id: String,
+    pub active: bool,
+    pub permission_id: Option<String>,
+}
+
 impl OrgService {
+    pub async fn load_dashboard(
+        organization_id: &str,
+        access_token: &str,
+    ) -> Result<Vec<DashboardRowData>, OrgError> {
+        let user_folders = Self::list_user_folders(organization_id, access_token).await?;
+
+        let mut rows = Vec::with_capacity(user_folders.len());
+        for folder in user_folders {
+            let active = Self::folder_has_files(&folder.folder_id, access_token).await?;
+            let permission_id =
+                Self::find_permission_id(&folder.folder_id, &folder.email, access_token).await?;
+
+            rows.push(DashboardRowData {
+                email: folder.email,
+                folder_id: folder.folder_id,
+                active,
+                permission_id,
+            });
+        }
+
+        rows.sort_by(|a, b| a.email.to_lowercase().cmp(&b.email.to_lowercase()));
+        Ok(rows)
+    }
+
+    pub async fn revoke_user_folder_permission(
+        folder_id: &str,
+        email: &str,
+        permission_id: Option<&str>,
+        access_token: &str,
+    ) -> Result<(), OrgError> {
+        let permission_id = match permission_id {
+            Some(id) => Some(id.to_string()),
+            None => Self::find_permission_id(folder_id, email, access_token).await?,
+        };
+
+        let Some(permission_id) = permission_id else {
+            // Nothing to revoke.
+            return Ok(());
+        };
+
+        let url = format!("{FILES_URL}/{folder_id}/permissions/{permission_id}");
+        HttpService::<()>::new(&url)
+            .auth(access_token)
+            .delete_no_response()
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn invite_user(
         user_email: &str,
         organization_id: &str,
@@ -204,5 +266,113 @@ impl OrgService {
                 .next()
                 .expect("Already checked it is non-empty"))
         }
+    }
+
+    async fn list_user_folders(
+        organization_id: &str,
+        access_token: &str,
+        email: &str,
+    ) -> Result<Vec<UserFolderEntry>, OrgError> {
+        #[derive(Debug, Deserialize)]
+        struct DriveFile {
+            id: String,
+            name: String,
+            #[serde(rename = "appProperties")]
+            app_properties: Option<HashMap<String, String>>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct DriveFilesResponse {
+            files: Vec<DriveFile>,
+        }
+
+        let query = format!(
+            "q=mimeType='application/vnd.google-apps.folder' and trashed=false and '{organization_id}' in parents and appProperties has {{ key='application' and value='archive-client' }} and appProperties has {{ key='user' and value='{}' }}", email
+        );
+
+        let files = HttpService::<()>::new(FILES_URL)
+            .auth(access_token)
+            .query(&query)
+            .query("fields=files(id,name,appProperties)")
+            .get::<DriveFilesResponse>()
+            .await?
+            .files;
+
+        let mut result = Vec::with_capacity(files.len());
+        for file in files {
+            let email = file
+                .app_properties
+                .as_ref()
+                .and_then(|p| p.get("user"))
+                .cloned()
+                .unwrap_or(file.name);
+
+            result.push(UserFolderEntry {
+                folder_id: file.id,
+                email,
+            });
+        }
+
+        Ok(result)
+    }
+
+    async fn folder_has_files(folder_id: &str, access_token: &str) -> Result<bool, OrgError> {
+        #[derive(Debug, Deserialize)]
+        struct FileId {
+            id: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct FilesResponse {
+            files: Vec<FileId>,
+        }
+
+        let query = format!("q='{folder_id}' in parents and trashed=false");
+
+        let response = HttpService::<()>::new(FILES_URL)
+            .auth(access_token)
+            .query("pageSize=1")
+            .query("fields=files(id)")
+            .query(&query)
+            .get::<FilesResponse>()
+            .await?;
+
+        Ok(!response.files.is_empty())
+    }
+
+    async fn find_permission_id(
+        folder_id: &str,
+        email: &str,
+        access_token: &str,
+    ) -> Result<Option<String>, OrgError> {
+        #[derive(Debug, Deserialize)]
+        struct Permission {
+            id: String,
+            #[serde(rename = "emailAddress")]
+            email_address: Option<String>,
+            #[serde(rename = "type")]
+            permission_type: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct PermissionsResponse {
+            permissions: Vec<Permission>,
+        }
+
+        let url = format!("{FILES_URL}/{folder_id}/permissions");
+        let response = HttpService::<()>::new(&url)
+            .auth(access_token)
+            .query("fields=permissions(id,emailAddress,type)")
+            .get::<PermissionsResponse>()
+            .await?;
+
+        let found = response.permissions.into_iter().find(|p| {
+            p.permission_type == "user"
+                && p.email_address
+                    .as_ref()
+                    .is_some_and(|a| a.eq_ignore_ascii_case(email))
+        });
+
+        Ok(found.map(|p| p.id))
     }
 }

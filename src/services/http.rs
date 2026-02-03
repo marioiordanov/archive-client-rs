@@ -53,6 +53,7 @@ impl<TRequest: Serialize> HttpService<TRequest> {
             "get" => HTTP.get(self.url),
             "post" => HTTP.post(self.url),
             "put" => HTTP.put(self.url),
+            "delete" => HTTP.delete(self.url),
             unimplemented_method => unimplemented!("{unimplemented_method}"),
         };
 
@@ -85,6 +86,10 @@ impl<TRequest: Serialize> HttpService<TRequest> {
 
     pub async fn get<TResponse: DeserializeOwned>(self) -> Result<TResponse, CommonServiceError> {
         self.send::<TResponse>("get").await
+    }
+
+    pub async fn delete_no_response(self) -> Result<(), CommonServiceError> {
+        self.send_no_response("delete").await
     }
 
     async fn send<TResponse: DeserializeOwned>(
