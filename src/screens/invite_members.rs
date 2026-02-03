@@ -1,8 +1,11 @@
 use std::collections::VecDeque;
 
+use iced::Alignment::Center;
+use iced::alignment::Horizontal::Left;
 use iced::alignment::{Horizontal, Vertical};
-use iced::widget::{button, column, container, row, scrollable, text, text_editor};
-use iced::{Alignment, Element, Length};
+use iced::widget::{button, column, container, row, scrollable, text, text_editor, tooltip};
+use iced::widget::table;
+use iced::{Alignment, Border, Element, Length, Theme};
 
 use crate::app::message::ScreenMessage;
 
@@ -163,9 +166,24 @@ impl InviteMembersScreen {
         let title = text("Invite members").size(32);
         let subtitle = text("Enter one email per line, or comma-separated.").size(14);
 
+        const PANEL_HEIGHT: f32 = 260.0;
+
+        let panel_style = |theme: &Theme| {
+            let palette = theme.extended_palette();
+
+            container::Style {
+                border: Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..Default::default()
+            }
+        };
+
         let mut editor_widget = text_editor(&self.editor)
             .placeholder("alice@example.com\nbob@example.com")
-            .height(Length::Fixed(140.0));
+            .height(Length::Fill);
 
         // If on_action is not set, the text editor is disabled.
         if !self.sending {
@@ -205,24 +223,61 @@ impl InviteMembersScreen {
 
         let history_list = render_history(&self.history);
 
-        let content = column![
-            title,
-            subtitle,
-            editor_widget,
+        let editor_panel = container(editor_widget)
+            .padding(6)
+            .height(Length::Fixed(PANEL_HEIGHT))
+            .width(Length::Fill)
+            .style(panel_style);
+
+        let history_table = container(
+            scrollable(history_list)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .padding(6)
+        .height(Length::Fixed(PANEL_HEIGHT))
+        .width(Length::Fill)
+        .style(panel_style);
+
+        let left = column![
+            text("Invitees").size(18),
+            editor_panel,
             row![send_button].spacing(10),
             current,
+        ]
+        .spacing(12)
+        .width(Length::Fill);
+
+        let right = column![
             text("History").size(18),
-            container(scrollable(history_list)).max_height(260).width(Length::Fill),
+            history_table,
+        ]
+        .spacing(12)
+        .width(Length::Fill);
+
+        let main = row![
+            container(left).width(Length::FillPortion(2)),
+            container(right).width(Length::FillPortion(3)),
+        ]
+        .spacing(18)
+        .width(Length::Fill)
+        .align_y(Alignment::Start);
+
+        let content = column![
+            title.width(Length::Fill).align_x(Left),
+            subtitle.width(Length::Fill).align_x(Left),
+            main,
             row![continue_button].spacing(10),
             hint,
+
         ]
         .spacing(12)
         .align_x(Alignment::Center);
 
         let content = container(content)
             .padding(24)
-            .width(Length::Shrink)
-            .max_width(600);
+            .width(Length::Fill)
+            .max_width(1100);
 
         container(content)
             .width(Length::Fill)
@@ -238,32 +293,38 @@ fn render_history(history: &[InviteHistoryRow]) -> Element<'_, Message> {
         return column![text("No invites sent yet.").size(12)].into();
     }
 
-    let mut col = column![].spacing(6);
+    // Render newest-first.
+    let mut rows: Vec<InviteHistoryRow> = history.to_vec();
+    rows.reverse();
 
-    // Render newest-first, grouped by run id.
-    let mut items: Vec<InviteHistoryRow> = history.to_vec();
-    items.reverse();
+    let columns = [
+        table::column(text("Attempt").size(14), |row: InviteHistoryRow| {
+            text(row.run_id.to_string()).size(12)
+        })
+        .width(Length::Fixed(90.0))
+        .align_x(Horizontal::Left),
+        table::column(text("Email").size(14), |row: InviteHistoryRow| {
+            text(row.email).size(12)
+        })
+        .width(Length::Fill)
+        .align_x(Horizontal::Left),
+        table::column(text("Status").size(14), |row: InviteHistoryRow| {
+            let status = match row.status {
+                InviteStatus::Sent => "Sent".to_string(),
+                InviteStatus::Error(e) => format!("Error: {e}"),
+            };
+            text(status).size(12)
+        })
+        .width(Length::Fixed(200.0))
+        .align_x(Horizontal::Left),
+    ];
 
-    let mut last_run: Option<u64> = None;
-    for item in items {
-        if last_run != Some(item.run_id) {
-            last_run = Some(item.run_id);
-            col = col.push(text(format!("Attempt #{}", item.run_id)).size(14));
-        }
-
-        let status = match item.status {
-            InviteStatus::Sent => "Sent".to_string(),
-            InviteStatus::Error(e) => format!("Error: {e}"),
-        };
-
-        col = col.push(
-            row![text(item.email).size(12), text(status).size(12)]
-                .spacing(10)
-                .width(Length::Fill),
-        );
-    }
-
-    col.into()
+    table::Table::new(columns, rows)
+        .width(Length::Fill)
+        .padding_x(8)
+        .padding_y(6)
+        .separator(1)
+        .into()
 }
 
 fn parse_emails(input: &str) -> Vec<String> {
