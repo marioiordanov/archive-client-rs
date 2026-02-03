@@ -6,7 +6,7 @@ use crate::{
     ArchiveClient,
     app::{
         self,
-        message::{GlobalError, Message, OrgMessage, ScreenMessage},
+        message::{GlobalError, Message, OrgError, OrgMessage, ScreenMessage},
         state::{Intent, Screen, SessionState, UserProfile},
     },
     screens::{self, signin::SignInScreen},
@@ -61,12 +61,7 @@ impl ArchiveClient {
                 )
                 .await
             },
-            move |result| {
-                Message::Org(OrgMessage::PermissionRevoked {
-                    folder_id,
-                    result,
-                })
-            },
+            move |result| Message::Org(OrgMessage::PermissionRevoked { folder_id, result }),
         )
     }
 }
@@ -85,19 +80,26 @@ impl ArchiveClient {
         Task::none()
     }
 
-    fn run_intent(&self, intent: Intent) -> Task<Message> {
+    fn run_intent(&self, intent: &Intent) -> Task<Message> {
+        let access_token = self.app.session.user.access_token.clone();
         match intent {
             Intent::FetchInvitations => {
                 let email = self.app.session.user.email.clone();
-                Self::fetch_invitations_task(email, self.app.session.user.access_token.clone())
+                Self::fetch_invitations_task(email, access_token)
             }
             Intent::CreateOrg => Task::perform(
                 OrgService::get_or_create_organization(
-                    self.app.session.user.access_token.clone(),
+                    access_token,
                     self.app.session.user.email.clone(),
                 ),
                 |organisation| Message::Org(OrgMessage::OrgCreated(organisation)),
             ),
+            Intent::SendInvitations{run_id, email, org_id} => {
+                Self::invite_user_task(*run_id, email.clone(), org_id.clone(), access_token)
+            }
+            Intent::LoadDashboard { org_id } => {
+                Self::load_dashboard_task(org_id.clone(), access_token)
+            }
         }
     }
 
@@ -163,18 +165,25 @@ impl ArchiveClient {
                             email,
                             screens::invite_members::InviteStatus::Sent,
                         ),
+                        Err(org_error @ OrgError::Common(app::message::CommonServiceError::TokenExpired)) => {
+                            let global_error = org_error.into();
+                            return self.handle_error(global_error);
+                        }
                         // TODO: on unsuccessful invitation, delete the user folder from the root folder in DRIVE
                         Err(e) => screen.push_history(
                             run_id,
                             email,
                             screens::invite_members::InviteStatus::Error(e.to_string()),
                         ),
+
                     }
 
                     // Continue sequentially
                     if let Some(next_email) = screen.pop_next_email() {
                         let org_id = screen.org_id.clone();
                         let access_token = self.app.session.user.access_token.clone();
+                        self.app.retry_intent = Some(Intent::SendInvitations { run_id, org_id: org_id.clone(), email: next_email.clone() });
+
                         return Self::invite_user_task(run_id, next_email, org_id, access_token);
                     }
 
@@ -201,10 +210,7 @@ impl ArchiveClient {
 
                 Task::none()
             }
-            OrgMessage::PermissionRevoked {
-                folder_id,
-                result,
-            } => {
+            OrgMessage::PermissionRevoked { folder_id, result } => {
                 if let Screen::OrgDashboard(screen) = &mut self.app.screen {
                     screen.set_removing(&folder_id, false);
 
@@ -250,7 +256,7 @@ impl ArchiveClient {
                     services::local_storage::ObjectType::UserProfile,
                 );
 
-                if let Some(intent) = self.app.retry_intent {
+                if let Some(intent) = &self.app.retry_intent {
                     self.run_intent(intent)
                 } else {
                     Task::none()
@@ -376,6 +382,8 @@ impl ArchiveClient {
 
                         let org_id = screen.org_id.clone();
                         let access_token = self.app.session.user.access_token.clone();
+                        self.app.retry_intent = Some(Intent::SendInvitations{run_id: run_id, org_id: org_id.clone(), email: email.clone()});
+
                         return Self::invite_user_task(run_id, email, org_id, access_token);
                     }
                     Task::none()
@@ -396,6 +404,7 @@ impl ArchiveClient {
                         screens::org_dashboard::OrgDashboardScreen::new(org_id.clone()),
                     );
 
+                    self.app.retry_intent = Some(Intent::LoadDashboard{org_id: org_id.clone()});
                     let access_token = self.app.session.user.access_token.clone();
                     Self::load_dashboard_task(org_id, access_token)
                 }
@@ -408,6 +417,8 @@ impl ArchiveClient {
                         screen.error = None;
                         let org_id = screen.org_id.clone();
                         let access_token = self.app.session.user.access_token.clone();
+                        self.app.retry_intent = Some(Intent::LoadDashboard { org_id: org_id.clone() });
+
                         return Self::load_dashboard_task(org_id, access_token);
                     }
 

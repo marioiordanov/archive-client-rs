@@ -21,10 +21,12 @@ impl fmt::Display for Screen {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum Intent {
     FetchInvitations,
     CreateOrg,
+    SendInvitations {run_id: u64, org_id: String, email: String},
+    LoadDashboard { org_id : String}
 }
 
 pub struct AppState {

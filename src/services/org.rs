@@ -4,16 +4,13 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::{
-    app::{
-        message::OrgError,
-        state::OrgInvitation,
-    },
+    app::{message::OrgError, state::OrgInvitation},
     constants::FILES_URL,
     services::http::HttpService,
 };
 
 #[derive(Debug, Clone)]
-struct UserFolderEntry {
+struct InvitedUserFolderEntry {
     folder_id: String,
     email: String,
 }
@@ -271,12 +268,10 @@ impl OrgService {
     async fn list_user_folders(
         organization_id: &str,
         access_token: &str,
-        email: &str,
-    ) -> Result<Vec<UserFolderEntry>, OrgError> {
+    ) -> Result<Vec<InvitedUserFolderEntry>, OrgError> {
         #[derive(Debug, Deserialize)]
         struct DriveFile {
             id: String,
-            name: String,
             #[serde(rename = "appProperties")]
             app_properties: Option<HashMap<String, String>>,
         }
@@ -287,42 +282,38 @@ impl OrgService {
         }
 
         let query = format!(
-            "q=mimeType='application/vnd.google-apps.folder' and trashed=false and '{organization_id}' in parents and appProperties has {{ key='application' and value='archive-client' }} and appProperties has {{ key='user' and value='{}' }}", email
+            "q=mimeType='application/vnd.google-apps.folder' and trashed=false and '{organization_id}' in parents and appProperties has {{ key='application' and value='archive-client' }}",
         );
 
         let files = HttpService::<()>::new(FILES_URL)
             .auth(access_token)
             .query(&query)
-            .query("fields=files(id,name,appProperties)")
+            .query("fields=files(id,appProperties)")
             .get::<DriveFilesResponse>()
             .await?
             .files;
 
         let mut result = Vec::with_capacity(files.len());
         for file in files {
-            let email = file
-                .app_properties
-                .as_ref()
-                .and_then(|p| p.get("user"))
-                .cloned()
-                .unwrap_or(file.name);
-
-            result.push(UserFolderEntry {
-                folder_id: file.id,
-                email,
-            });
+            if let Some(email) = file.app_properties.as_ref().and_then(|p| p.get("user")) {
+                result.push(InvitedUserFolderEntry {
+                    folder_id: file.id,
+                    email: email.clone(),
+                });
+            }
         }
 
         Ok(result)
     }
 
     async fn folder_has_files(folder_id: &str, access_token: &str) -> Result<bool, OrgError> {
-        #[derive(Debug, Deserialize)]
+        #[derive(Deserialize)]
         struct FileId {
-            id: String,
+            #[serde(rename = "id")]
+            _id: String,
         }
 
-        #[derive(Debug, Deserialize)]
+        #[derive(Deserialize)]
         struct FilesResponse {
             files: Vec<FileId>,
         }

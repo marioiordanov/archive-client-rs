@@ -1,6 +1,6 @@
 use iced::alignment::{Horizontal, Vertical};
-use iced::widget::{button, column, container, row, scrollable, text};
 use iced::widget::table;
+use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Alignment, Border, Element, Length, Theme};
 
 use crate::app::message::ScreenMessage;
@@ -84,9 +84,13 @@ impl OrgDashboardScreen {
             }
         };
 
-        let refresh = button(if self.loading { "Loading…" } else { "Refresh" })
-            .padding(12)
-            .on_press(Message::RefreshClicked);
+        let refresh = button(if self.loading {
+            "Loading…"
+        } else {
+            "Refresh"
+        })
+        .padding(12)
+        .on_press(Message::RefreshClicked);
 
         let status_line: Element<Message> = if let Some(err) = &self.error {
             text(format!("Error: {err}")).size(12).into()
