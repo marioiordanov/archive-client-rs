@@ -8,7 +8,7 @@ use crate::app::message::ScreenMessage;
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    EditorAction(text_editor::Action),
+    Edit(text_editor::Action),
     SendInvitesClicked,
     ContinueClicked,
 }
@@ -64,12 +64,8 @@ impl InviteMembersScreen {
 
     pub fn update(&mut self, msg: Message) {
         match msg {
-            Message::EditorAction(action) => {
-                if !self.sending {
-                    self.editor.perform(action);
-                }
-            }
             Message::SendInvitesClicked | Message::ContinueClicked => {}
+            Message::Edit(action) => self.editor.perform(action),
         }
     }
 
@@ -173,7 +169,7 @@ impl InviteMembersScreen {
 
         // If on_action is not set, the text editor is disabled.
         if !self.sending {
-            editor_widget = editor_widget.on_action(Message::EditorAction);
+            editor_widget = editor_widget.on_action(Message::Edit);
         }
 
         let mut send_button = button(if self.sending {

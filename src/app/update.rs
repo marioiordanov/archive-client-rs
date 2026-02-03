@@ -285,9 +285,9 @@ impl ArchiveClient {
             }
             Message::Screen(ScreenMessage::InviteMembers(msg)) => {
                 match msg {
-                    screens::invite_members::Message::EditorAction(action) => {
+                    screen_msg @ screens::invite_members::Message::Edit(_) => {
                         if let Screen::InviteMembers(screen) = &mut self.app.screen {
-                            screen.update(screens::invite_members::Message::EditorAction(action));
+                            screen.update(screen_msg);
                         }
                         Task::none()
                     }
