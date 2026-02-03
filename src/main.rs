@@ -43,8 +43,6 @@ impl ArchiveClient {
     fn boot() -> (Self, Task<Message>) {
         println!("Starting Archive Client...");
 
-        let client = reqwest::Client::new();
-
         let (app, task) = if let Some(profile) = LocalStorageService::load_object::<UserProfile>(
             services::local_storage::ObjectType::UserProfile,
         ) {

@@ -161,8 +161,6 @@ impl OrgService {
             app_properties: HashMap<&'a str, &'a str>,
         }
 
-        let url = Url::parse(FILES_URL).unwrap();
-
         let mut map = HashMap::new();
         map.insert("archiveClientType", "application");
         map.insert("orgId", &owner_email);

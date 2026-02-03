@@ -49,7 +49,7 @@ impl<TRequest: Serialize> HttpService<TRequest> {
     }
 
     fn build_request(self, method: &str) -> RequestBuilder {
-        let mut client = match method {
+        let mut request = match method {
             "get" => HTTP.get(self.url),
             "post" => HTTP.post(self.url),
             "put" => HTTP.put(self.url),
@@ -57,22 +57,22 @@ impl<TRequest: Serialize> HttpService<TRequest> {
         };
 
         if let Some(token) = self.bearer_token {
-            client = client.bearer_auth(token);
+            request = request.bearer_auth(token);
         }
 
-        client = if let Some(json_request) = self.json_body {
-            client.json(&json_request)
+        request = if let Some(json_request) = self.json_body {
+            request.json(&json_request)
         } else {
             let mut body = url::form_urlencoded::Serializer::new(String::new());
             for (key, value) in self.form_data.iter() {
                 body.append_pair(key, value);
             }
 
-            client = client.header(CONTENT_TYPE, "application/x-www-form-urlencoded");
-            client.body(body.finish())
+            request = request.header(CONTENT_TYPE, "application/x-www-form-urlencoded");
+            request.body(body.finish())
         };
 
-        client
+        request
     }
 
     pub async fn post<TResponse: DeserializeOwned>(self) -> Result<TResponse, CommonServiceError> {
