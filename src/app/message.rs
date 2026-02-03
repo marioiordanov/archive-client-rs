@@ -20,6 +20,7 @@ pub enum Message {
 pub enum ScreenMessage {
     Login(screens::signin::Message),
     OrgSelection(screens::org_selection::Message),
+    InviteMembers(screens::invite_members::Message),
 }
 
 #[derive(Clone, Debug)]
@@ -28,6 +29,11 @@ pub enum OrgMessage {
     OrgCreated(Result<RootFolderEntry, OrgError>),
     OrgJoined(Result<(), OrgError>),
     InviteSent(Result<(), OrgError>),
+    InviteUserFinished {
+        run_id: u64,
+        email: String,
+        result: Result<(), OrgError>,
+    },
 }
 
 #[derive(Clone, Debug)]

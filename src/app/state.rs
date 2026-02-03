@@ -6,6 +6,7 @@ use crate::screens::{self};
 pub enum Screen {
     SignIn(screens::signin::SignInScreen),
     OrgSelection(screens::org_selection::OrgSelectionScreen),
+    InviteMembers(screens::invite_members::InviteMembersScreen),
 }
 
 impl fmt::Display for Screen {
@@ -13,6 +14,7 @@ impl fmt::Display for Screen {
         match self {
             Screen::SignIn(_) => write!(f, "SignIn"),
             Screen::OrgSelection(_) => write!(f, "OrgSelection"),
+            Screen::InviteMembers(_) => write!(f, "InviteMembers"),
         }
     }
 }

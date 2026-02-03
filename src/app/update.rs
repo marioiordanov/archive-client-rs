@@ -1,17 +1,42 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use iced::{Task, futures::FutureExt};
+use iced::Task;
 
 use crate::{
     ArchiveClient,
     app::{
         self,
-        message::{AuthError, GlobalError, Message, OrgMessage, ScreenMessage},
-        state::{AuthState, Intent, Screen, SessionState, UserProfile},
+        message::{GlobalError, Message, OrgMessage, ScreenMessage},
+        state::{Intent, Screen, SessionState, UserProfile},
     },
     screens::{self, signin::SignInScreen},
     services::{self, auth::AuthService, local_storage::LocalStorageService, org::OrgService},
 };
+
+impl ArchiveClient {
+    fn invite_user_task(
+        run_id: u64,
+        email: String,
+        org_id: String,
+        access_token: String,
+    ) -> Task<Message> {
+        let email_for_async = email.clone();
+        Task::perform(
+            async move {
+                OrgService::invite_user(&email_for_async, &org_id, &access_token)
+                    .await
+                    .map(|_| ())
+            },
+            move |result| {
+                Message::Org(OrgMessage::InviteUserFinished {
+                    run_id,
+                    email,
+                    result,
+                })
+            },
+        )
+    }
+}
 
 impl ArchiveClient {
     pub fn fetch_invitations_task(user_email: String, access_token: String) -> Task<Message> {
@@ -83,10 +108,50 @@ impl ArchiveClient {
                     services::local_storage::ObjectType::Org,
                 );
 
+                // Forced next step: invite members
+                let org_id = self.app.org.config.archive_folder_id.clone();
+                self.app.screen = Screen::InviteMembers(screens::invite_members::InviteMembersScreen::new(org_id));
+
                 Task::none()
             }
             OrgMessage::OrgJoined(Ok(_)) => todo!(),
             OrgMessage::InviteSent(Ok(_)) => todo!(),
+            OrgMessage::InviteUserFinished {
+                run_id,
+                email,
+                result,
+            } => {
+                if let Screen::InviteMembers(screen) = &mut self.app.screen {
+                    match result {
+                        Ok(()) => screen.push_history(
+                            run_id,
+                            email,
+                            screens::invite_members::InviteStatus::Sent,
+                        ),
+                        Err(e) => screen.push_history(
+                            run_id,
+                            email,
+                            screens::invite_members::InviteStatus::Error(e.to_string()),
+                        ),
+                    }
+
+                    // Continue sequentially
+                    if let Some(next_email) = screen.pop_next_email() {
+                        let org_id = screen.org_id.clone();
+                        let access_token = self.app.session.user.access_token.clone();
+                        return Self::invite_user_task(
+                            run_id,
+                            next_email,
+                            org_id,
+                            access_token,
+                        );
+                    }
+
+                    screen.finish_current_email();
+                }
+
+                Task::none()
+            }
             OrgMessage::OrgJoined(Err(e))
             | OrgMessage::InviteSent(Err(e))
             | OrgMessage::InvitationsLoaded(Err(e))
@@ -218,9 +283,50 @@ impl ArchiveClient {
                 println!("Join organization clicked: {}", org_id);
                 Task::none()
             }
-            _ => {
-                println!("Unhandled message");
-                Task::none()
+            Message::Screen(ScreenMessage::InviteMembers(msg)) => {
+                match msg {
+                    screens::invite_members::Message::EditorAction(action) => {
+                        if let Screen::InviteMembers(screen) = &mut self.app.screen {
+                            screen.update(screens::invite_members::Message::EditorAction(action));
+                        }
+                        Task::none()
+                    }
+                    screens::invite_members::Message::SendInvitesClicked => {
+                        if let Screen::InviteMembers(screen) = &mut self.app.screen {
+                            let Some(run_id) = screen.begin_run() else {
+                                return Task::none();
+                            };
+
+                            let Some(email) = screen.pop_next_email() else {
+                                screen.finish_current_email();
+                                return Task::none();
+                            };
+
+                            let org_id = screen.org_id.clone();
+                            let access_token = self.app.session.user.access_token.clone();
+                            return Self::invite_user_task(run_id, email, org_id, access_token);
+                        }
+                        Task::none()
+                    }
+                    screens::invite_members::Message::ContinueClicked => {
+                        let can_continue = if let Screen::InviteMembers(screen) = &self.app.screen {
+                            screen.can_continue()
+                        } else {
+                            false
+                        };
+
+                        if !can_continue {
+                            return Task::none();
+                        }
+
+                        self.app.screen =
+                            Screen::OrgSelection(screens::org_selection::OrgSelectionScreen::new());
+
+                        let email = self.app.session.user.email.clone();
+                        let access_token = self.app.session.user.access_token.clone();
+                        Self::fetch_invitations_task(email, access_token)
+                    }
+                }
             }
         }
     }

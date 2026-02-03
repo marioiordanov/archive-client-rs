@@ -9,10 +9,10 @@ mod ui_error;
 
 use crate::{
     app::{
-        message::{Message, OrgMessage},
+        message::Message,
         state::{AppState, Intent, SessionState, UserProfile},
     },
-    services::{local_storage::LocalStorageService, org::OrgService},
+    services::local_storage::LocalStorageService,
 };
 
 lazy_static! {
@@ -86,6 +86,9 @@ impl ArchiveClient {
         let contents = match &self.app.screen {
             app::state::Screen::SignIn(screen) => screen.view().map(|m| Message::Screen(m.into())),
             app::state::Screen::OrgSelection(screen) => {
+                screen.view().map(|m| Message::Screen(m.into()))
+            }
+            app::state::Screen::InviteMembers(screen) => {
                 screen.view().map(|m| Message::Screen(m.into()))
             }
         };
