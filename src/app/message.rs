@@ -154,6 +154,8 @@ impl From<reqwest::Error> for CommonServiceError {
 pub enum OrgError {
     #[error("Root folder not found")]
     NoRootFolder,
+    #[error("Invalid email address")]
+    InvalidEmailInvitation,
     #[error(transparent)]
     Common(#[from] CommonServiceError),
 }
@@ -184,6 +186,19 @@ impl From<OrgError> for GlobalError {
             GlobalError::Common(e)
         } else {
             GlobalError::OrgError(value)
+        }
+    }
+}
+
+impl From<reqwest::Error> for OrgError {
+    fn from(value: reqwest::Error) -> Self {
+        if let Some(status) = value.status() {
+            match status {
+                StatusCode::BAD_REQUEST => OrgError::InvalidEmailInvitation,
+                _ => OrgError::Common(CommonServiceError::from(value)),
+            }
+        } else {
+            OrgError::Common(CommonServiceError::from(value))
         }
     }
 }

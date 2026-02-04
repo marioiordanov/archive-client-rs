@@ -94,9 +94,11 @@ impl ArchiveClient {
                 ),
                 |organisation| Message::Org(OrgMessage::OrgCreated(organisation)),
             ),
-            Intent::SendInvitations{run_id, email, org_id} => {
-                Self::invite_user_task(*run_id, email.clone(), org_id.clone(), access_token)
-            }
+            Intent::SendInvitations {
+                run_id,
+                email,
+                org_id,
+            } => Self::invite_user_task(*run_id, email.clone(), org_id.clone(), access_token),
             Intent::LoadDashboard { org_id } => {
                 Self::load_dashboard_task(org_id.clone(), access_token)
             }
@@ -165,7 +167,11 @@ impl ArchiveClient {
                             email,
                             screens::invite_members::InviteStatus::Sent,
                         ),
-                        Err(org_error @ OrgError::Common(app::message::CommonServiceError::TokenExpired)) => {
+                        Err(
+                            org_error @ OrgError::Common(
+                                app::message::CommonServiceError::TokenExpired,
+                            ),
+                        ) => {
                             let global_error = org_error.into();
                             return self.handle_error(global_error);
                         }
@@ -175,14 +181,17 @@ impl ArchiveClient {
                             email,
                             screens::invite_members::InviteStatus::Error(e.to_string()),
                         ),
-
                     }
 
                     // Continue sequentially
                     if let Some(next_email) = screen.pop_next_email() {
                         let org_id = screen.org_id.clone();
                         let access_token = self.app.session.user.access_token.clone();
-                        self.app.retry_intent = Some(Intent::SendInvitations { run_id, org_id: org_id.clone(), email: next_email.clone() });
+                        self.app.retry_intent = Some(Intent::SendInvitations {
+                            run_id,
+                            org_id: org_id.clone(),
+                            email: next_email.clone(),
+                        });
 
                         return Self::invite_user_task(run_id, next_email, org_id, access_token);
                     }
@@ -382,7 +391,11 @@ impl ArchiveClient {
 
                         let org_id = screen.org_id.clone();
                         let access_token = self.app.session.user.access_token.clone();
-                        self.app.retry_intent = Some(Intent::SendInvitations{run_id: run_id, org_id: org_id.clone(), email: email.clone()});
+                        self.app.retry_intent = Some(Intent::SendInvitations {
+                            run_id: run_id,
+                            org_id: org_id.clone(),
+                            email: email.clone(),
+                        });
 
                         return Self::invite_user_task(run_id, email, org_id, access_token);
                     }
@@ -404,7 +417,9 @@ impl ArchiveClient {
                         screens::org_dashboard::OrgDashboardScreen::new(org_id.clone()),
                     );
 
-                    self.app.retry_intent = Some(Intent::LoadDashboard{org_id: org_id.clone()});
+                    self.app.retry_intent = Some(Intent::LoadDashboard {
+                        org_id: org_id.clone(),
+                    });
                     let access_token = self.app.session.user.access_token.clone();
                     Self::load_dashboard_task(org_id, access_token)
                 }
@@ -417,7 +432,9 @@ impl ArchiveClient {
                         screen.error = None;
                         let org_id = screen.org_id.clone();
                         let access_token = self.app.session.user.access_token.clone();
-                        self.app.retry_intent = Some(Intent::LoadDashboard { org_id: org_id.clone() });
+                        self.app.retry_intent = Some(Intent::LoadDashboard {
+                            org_id: org_id.clone(),
+                        });
 
                         return Self::load_dashboard_task(org_id, access_token);
                     }
