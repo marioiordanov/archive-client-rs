@@ -97,7 +97,7 @@ impl OrgService {
         let url = format!("{FILES_URL}/{folder_id}/permissions/{permission_id}");
         HttpService::<()>::new(&url)
             .auth(access_token)
-            .delete_no_response()
+            .delete_no_response::<OrgError>()
             .await?;
 
         Ok(())
@@ -122,7 +122,7 @@ impl OrgService {
         let created_file = HttpService::new(FILES_URL)
             .auth(access_token)
             .json_body(create_file_request)
-            .post::<RootFolderEntry>()
+            .post::<RootFolderEntry, OrgError>()
             .await?;
 
         let permissions_request = DrivePermissionRequest {
@@ -132,15 +132,31 @@ impl OrgService {
         };
 
         let mut permissions_url =
-            Url::from_str(format!("{FILES_URL}/{}/permissions", created_file.id).as_str()).unwrap();
+            Url::from_str(&format!("{FILES_URL}/{}/permissions", created_file.id)).unwrap();
         permissions_url.set_query(Some("fields=id,role"));
         permissions_url.set_query(Some("sendNotificationEmail=false"));
 
-        HttpService::new(permissions_url.as_str())
+        let permissions_result = HttpService::new(permissions_url.as_str())
             .auth(access_token)
             .json_body(permissions_request)
-            .post_no_response()
-            .await?;
+            .post_no_response::<OrgError>()
+            .await;
+
+        match permissions_result {
+            // if email is invalid, delete the folder
+            Err(OrgError::InvalidEmailInvitation) => {
+                let _ = HttpService::<()>::new(&format!("{}/{}", FILES_URL, created_file.id))
+                    .auth(access_token)
+                    .delete_no_response::<OrgError>()
+                    .await;
+
+                return Err(OrgError::InvalidEmailInvitation);
+            }
+            Err(e) => {
+                return Err(e);
+            }
+            _ => {}
+        }
 
         Ok(created_file)
     }
@@ -171,7 +187,7 @@ impl OrgService {
         .auth(access_token)
         .query(&format!("q=sharedWithMe=true and trashed=false and mimeType='application/vnd.google-apps.folder' and appProperties has {{ key='application' and value='archive-client' }} and appProperties has {{ key='user' and value='{user_email}' }} "))
         .query("fields=files(id,name,appProperties,sharingUser(emailAddress),sharedWithMeTime)")
-        .get::<SharedWithMeFilesResponse>()
+        .get::<SharedWithMeFilesResponse, OrgError>()
         .await?.files.into_iter().map(|s| OrgInvitation{ org_id: s.id, org_name: s.name, invited_by: s.sharing_user.email_address })
         .collect::<Vec<OrgInvitation>>();
 
@@ -231,7 +247,7 @@ impl OrgService {
                 mime_type: "application/vnd.google-apps.folder",
                 app_properties: map,
             })
-            .post::<RootFolderEntry>()
+            .post::<RootFolderEntry, OrgError>()
             .await
             .map_err(|e| e.into())
     }
@@ -252,7 +268,7 @@ impl OrgService {
         .query("fields=files(id,name)")
         .query(&format!("q=mimeType='application/vnd.google-apps.folder' and appProperties has {{ key='archiveClientType' and value='application' }} and appProperties has {{ key='orgId' and value='{owner_email}' }} "))
         .auth(access_token)
-        .get::<RootFolderResponse>().await?;
+        .get::<RootFolderResponse, OrgError>().await?;
 
         if response.files.is_empty() {
             Err(OrgError::NoRootFolder)
@@ -289,7 +305,7 @@ impl OrgService {
             .auth(access_token)
             .query(&query)
             .query("fields=files(id,appProperties)")
-            .get::<DriveFilesResponse>()
+            .get::<DriveFilesResponse, OrgError>()
             .await?
             .files;
 
@@ -325,7 +341,7 @@ impl OrgService {
             .query("pageSize=1")
             .query("fields=files(id)")
             .query(&query)
-            .get::<FilesResponse>()
+            .get::<FilesResponse, OrgError>()
             .await?;
 
         Ok(!response.files.is_empty())
@@ -354,7 +370,7 @@ impl OrgService {
         let response = HttpService::<()>::new(&url)
             .auth(access_token)
             .query("fields=permissions(id,emailAddress,type)")
-            .get::<PermissionsResponse>()
+            .get::<PermissionsResponse, OrgError>()
             .await?;
 
         let found = response.permissions.into_iter().find(|p| {

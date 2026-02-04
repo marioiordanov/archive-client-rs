@@ -76,47 +76,54 @@ impl<TRequest: Serialize> HttpService<TRequest> {
         request
     }
 
-    pub async fn post<TResponse: DeserializeOwned>(self) -> Result<TResponse, CommonServiceError> {
-        self.send::<TResponse>("post").await
+    pub async fn post<TResponse: DeserializeOwned, TError: From<reqwest::Error>>(
+        self,
+    ) -> Result<TResponse, TError> {
+        self.send::<TResponse, TError>("post").await
     }
 
-    pub async fn post_no_response(self) -> Result<(), CommonServiceError> {
+    pub async fn post_no_response<TError: From<reqwest::Error>>(self) -> Result<(), TError> {
         self.send_no_response("post").await
     }
 
-    pub async fn get<TResponse: DeserializeOwned>(self) -> Result<TResponse, CommonServiceError> {
-        self.send::<TResponse>("get").await
+    pub async fn get<TResponse: DeserializeOwned, TError: From<reqwest::Error>>(
+        self,
+    ) -> Result<TResponse, TError> {
+        self.send::<TResponse, TError>("get").await
     }
 
-    pub async fn delete_no_response(self) -> Result<(), CommonServiceError> {
-        self.send_no_response("delete").await
+    pub async fn delete_no_response<TError: From<reqwest::Error>>(self) -> Result<(), TError> {
+        self.send_no_response::<TError>("delete").await
     }
 
-    async fn send<TResponse: DeserializeOwned>(
+    async fn send<TResponse: DeserializeOwned, TError: From<reqwest::Error>>(
         self,
         method: &str,
-    ) -> Result<TResponse, CommonServiceError> {
+    ) -> Result<TResponse, TError> {
         let request = self.build_request(method);
 
         request
             .send()
             .await
-            .map_err(|e| CommonServiceError::from(e))?
+            .map_err(|e| TError::from(e))?
             .error_for_status()
-            .map_err(|e| CommonServiceError::from(e))?
+            .map_err(|e| TError::from(e))?
             .json::<TResponse>()
             .await
-            .map_err(|e| CommonServiceError::from(e))
+            .map_err(|e| TError::from(e))
     }
-    async fn send_no_response(self, method: &str) -> Result<(), CommonServiceError> {
+    async fn send_no_response<TError: From<reqwest::Error>>(
+        self,
+        method: &str,
+    ) -> Result<(), TError> {
         let request = self.build_request(method);
 
-        request
-            .send()
-            .await
-            .map_err(|e| CommonServiceError::from(e))?
+        let s = request.send().await;
+
+        println!("{:?}", s);
+        s.map_err(|e| TError::from(e))?
             .error_for_status()
-            .map_err(|e| CommonServiceError::from(e))
+            .map_err(|e| TError::from(e))
             .map(|_| ())
     }
 }

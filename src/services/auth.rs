@@ -70,7 +70,7 @@ impl AuthService {
             .form_data("refresh_token", refresh_token)
             .form_data("grant_type", "refresh_token")
             .form_data("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
-            .post::<RefreshTokenResponse>()
+            .post::<RefreshTokenResponse, CommonServiceError>()
             .await
             .map_err(|e| e.into())
     }
@@ -94,7 +94,7 @@ impl AuthService {
                     .form_data("redirect_uri", REDIRECT_URI)
                     .form_data("grant_type", "authorization_code")
                     .form_data("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
-                    .post::<AccessTokenResponse>()
+                    .post::<AccessTokenResponse, CommonServiceError>()
                     .await
                     .map_err(|e| AuthError::from(e));
             }
