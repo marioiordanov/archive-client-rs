@@ -44,9 +44,10 @@ impl ArchiveClient {
     fn boot() -> (Self, Task<Message>) {
         println!("Starting Archive Client...");
 
-        let (app, screen, task) = if let Some(profile) = LocalStorageService::load_object::<UserProfile>(
-            services::local_storage::ObjectType::UserProfile,
-        ) {
+        let (app, screen, task) = if let Some(profile) =
+            LocalStorageService::load_object::<UserProfile>(
+                services::local_storage::ObjectType::UserProfile,
+            ) {
             let email = profile.email.clone();
             let app = AppState {
                 session: SessionState {
@@ -58,9 +59,8 @@ impl ArchiveClient {
                 retry_intent: Some(Intent::FetchInvitations),
             };
 
-            let screen= app::state::Screen::OrgSelection(
-                    screens::org_selection::OrgSelectionScreen::new(),
-                );
+            let screen =
+                app::state::Screen::OrgSelection(screens::org_selection::OrgSelectionScreen::new());
 
             let access_token = app.session.user.access_token.clone();
 
@@ -76,7 +76,7 @@ impl ArchiveClient {
                 retry_intent: None,
             };
             let screen = app::state::Screen::SignIn(screens::signin::SignInScreen::default());
-            (app,screen, Task::none())
+            (app, screen, Task::none())
         };
 
         (Self { app, screen }, task)
