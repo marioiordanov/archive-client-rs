@@ -16,7 +16,7 @@ use crate::{
 impl ArchiveClient {
     fn re_auth(&mut self) -> Task<Message> {
         self.app.session = SessionState::default();
-        self.app.screen = Screen::SignIn(SignInScreen::default());
+        self.screen = Screen::SignIn(SignInScreen::default());
         Task::none()
     }
 
@@ -68,7 +68,7 @@ impl ArchiveClient {
     pub fn handle_org_messages(&mut self, message: app::message::OrgMessage) -> Task<Message> {
         match message {
             OrgMessage::InvitationsLoaded(Ok(invitations)) => {
-                if let Screen::OrgSelection(screen) = &mut self.app.screen {
+                if let Screen::OrgSelection(screen) = &mut self.screen {
                     screen.invitations = invitations.clone();
                     screen.loading = false;
                 }
@@ -87,7 +87,7 @@ impl ArchiveClient {
 
                 // Forced next step: invite members
                 let org_id = self.app.org.config.archive_folder_id.clone();
-                self.app.screen = Screen::InviteMembers(
+                self.screen = Screen::InviteMembers(
                     screens::invite_members::InviteMembersScreen::new(org_id),
                 );
 
@@ -100,7 +100,7 @@ impl ArchiveClient {
                 email,
                 result,
             } => {
-                if let Screen::InviteMembers(screen) = &mut self.app.screen {
+                if let Screen::InviteMembers(screen) = &mut self.screen {
                     match result {
                         Ok(()) => screen.push_history(
                             run_id,
@@ -142,7 +142,7 @@ impl ArchiveClient {
                 Task::none()
             }
             OrgMessage::DashboardLoaded(Ok(rows)) => {
-                if let Screen::OrgDashboard(screen) = &mut self.app.screen {
+                if let Screen::OrgDashboard(screen) = &mut self.screen {
                     let screen_rows = rows
                         .into_iter()
                         .map(|r| screens::org_dashboard::DashboardRow {
@@ -160,7 +160,7 @@ impl ArchiveClient {
                 Task::none()
             }
             OrgMessage::PermissionRevoked { folder_id, result } => {
-                if let Screen::OrgDashboard(screen) = &mut self.app.screen {
+                if let Screen::OrgDashboard(screen) = &mut self.screen {
                     screen.set_removing(&folder_id, false);
 
                     match result {
@@ -212,7 +212,7 @@ impl ArchiveClient {
                 }
             }
             app::message::AuthMessage::AccessTokenReceived(Err(auth_error)) => {
-                if let Screen::SignIn(screen) = &mut self.app.screen {
+                if let Screen::SignIn(screen) = &mut self.screen {
                     screen.error = Some(auth_error.into());
                 }
                 Task::none()
@@ -250,7 +250,7 @@ impl ArchiveClient {
                 self.app.session.auth = app::state::AuthState::SignedIn;
 
                 // Navigate to organization selection screen
-                self.app.screen =
+                self.screen =
                     Screen::OrgSelection(screens::org_selection::OrgSelectionScreen::new());
                 self.app.retry_intent = Some(app::state::Intent::FetchInvitations);
 

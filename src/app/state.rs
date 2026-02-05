@@ -36,7 +36,6 @@ pub enum Intent {
 }
 
 pub struct AppState {
-    pub(crate) screen: Screen,
     pub(crate) session: SessionState,
     pub(crate) org: OrgState,
 

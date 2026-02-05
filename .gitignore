@@ -3,3 +3,5 @@
 .env
 
 /app-data
+
+/scripts

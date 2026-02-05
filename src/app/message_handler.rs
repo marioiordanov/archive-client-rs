@@ -14,7 +14,7 @@ use crate::{
 impl ArchiveClient {
     pub fn handle_message(&mut self, message: Message) -> (Task<Message>, Option<Screen>) {
         let default = (Task::none(), None);
-        match (&mut self.app.screen, message) {
+        match (&mut self.screen, message) {
             (
                 Screen::SignIn(screen),
                 Message::Screen(ScreenMessage::Login(
@@ -105,7 +105,7 @@ impl ArchiveClient {
                 }
 
                 let org_id = self.app.org.config.archive_folder_id.clone();
-                self.app.screen = Screen::OrgDashboard(
+                self.screen = Screen::OrgDashboard(
                     screens::org_dashboard::OrgDashboardScreen::new(org_id.clone()),
                 );
 
