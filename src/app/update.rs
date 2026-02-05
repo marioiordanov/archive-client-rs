@@ -14,66 +14,6 @@ use crate::{
 };
 
 impl ArchiveClient {
-    fn invite_user_task(
-        run_id: u64,
-        email: String,
-        org_id: String,
-        access_token: String,
-    ) -> Task<Message> {
-        let email_for_async = email.clone();
-        Task::perform(
-            async move {
-                OrgService::invite_user(&email_for_async, &org_id, &access_token)
-                    .await
-                    .map(|_| ())
-            },
-            move |result| {
-                Message::Org(OrgMessage::InviteUserFinished {
-                    run_id,
-                    email,
-                    result,
-                })
-            },
-        )
-    }
-
-    fn load_dashboard_task(org_id: String, access_token: String) -> Task<Message> {
-        Task::perform(
-            async move { OrgService::load_dashboard(&org_id, &access_token).await },
-            |result| Message::Org(OrgMessage::DashboardLoaded(result)),
-        )
-    }
-
-    fn revoke_permission_task(
-        folder_id: String,
-        email: String,
-        permission_id: Option<String>,
-        access_token: String,
-    ) -> Task<Message> {
-        let folder_id_for_async = folder_id.clone();
-        Task::perform(
-            async move {
-                OrgService::revoke_user_folder_permission(
-                    &folder_id_for_async,
-                    &email,
-                    permission_id.as_deref(),
-                    &access_token,
-                )
-                .await
-            },
-            move |result| Message::Org(OrgMessage::PermissionRevoked { folder_id, result }),
-        )
-    }
-}
-
-impl ArchiveClient {
-    pub fn fetch_invitations_task(user_email: String, access_token: String) -> Task<Message> {
-        Task::perform(
-            async move { OrgService::fetch_invitations(&user_email, &access_token).await },
-            |result| Message::Org(OrgMessage::InvitationsLoaded(result)),
-        )
-    }
-
     fn re_auth(&mut self) -> Task<Message> {
         self.app.session = SessionState::default();
         self.app.screen = Screen::SignIn(SignInScreen::default());
@@ -125,7 +65,7 @@ impl ArchiveClient {
         }
     }
 
-    fn handle_org_messages(&mut self, message: app::message::OrgMessage) -> Task<Message> {
+    pub fn handle_org_messages(&mut self, message: app::message::OrgMessage) -> Task<Message> {
         match message {
             OrgMessage::InvitationsLoaded(Ok(invitations)) => {
                 if let Screen::OrgSelection(screen) = &mut self.app.screen {
@@ -247,7 +187,7 @@ impl ArchiveClient {
         }
     }
 
-    fn handle_auth_messages(&mut self, message: app::message::AuthMessage) -> Task<Message> {
+    pub fn handle_auth_messages(&mut self, message: app::message::AuthMessage) -> Task<Message> {
         match message {
             app::message::AuthMessage::AccessTokenRefreshed(Err(_))
             | app::message::AuthMessage::SignedOut => self.re_auth(),
