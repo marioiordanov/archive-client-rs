@@ -1,0 +1,67 @@
+use iced::Task;
+
+use crate::{
+    ArchiveClient,
+    app::message::{Message, OrgMessage},
+    services::org::OrgService,
+};
+
+impl ArchiveClient {
+    pub fn fetch_invitations_task(user_email: String, access_token: String) -> Task<Message> {
+        Task::perform(
+            async move { OrgService::fetch_invitations(&user_email, &access_token).await },
+            |result| Message::Org(OrgMessage::InvitationsLoaded(result)),
+        )
+    }
+
+    pub fn invite_user_task(
+        run_id: u64,
+        email: String,
+        org_id: String,
+        access_token: String,
+    ) -> Task<Message> {
+        let email_for_async = email.clone();
+        Task::perform(
+            async move {
+                OrgService::invite_user(&email_for_async, &org_id, &access_token)
+                    .await
+                    .map(|_| ())
+            },
+            move |result| {
+                Message::Org(OrgMessage::InviteUserFinished {
+                    run_id,
+                    email,
+                    result,
+                })
+            },
+        )
+    }
+
+    pub fn load_dashboard_task(org_id: String, access_token: String) -> Task<Message> {
+        Task::perform(
+            async move { OrgService::load_dashboard(&org_id, &access_token).await },
+            |result| Message::Org(OrgMessage::DashboardLoaded(result)),
+        )
+    }
+
+    pub fn revoke_permission_task(
+        folder_id: String,
+        email: String,
+        permission_id: Option<String>,
+        access_token: String,
+    ) -> Task<Message> {
+        let folder_id_for_async = folder_id.clone();
+        Task::perform(
+            async move {
+                OrgService::revoke_user_folder_permission(
+                    &folder_id_for_async,
+                    &email,
+                    permission_id.as_deref(),
+                    &access_token,
+                )
+                .await
+            },
+            move |result| Message::Org(OrgMessage::PermissionRevoked { folder_id, result }),
+        )
+    }
+}
