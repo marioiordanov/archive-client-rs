@@ -103,7 +103,7 @@ impl ArchiveClient {
                 app::message::AuthMessage::AccessTokenRefreshed(Err(_))
                 | app::message::AuthMessage::SignedOut,
             ) => self.re_auth(),
-            _ => Task::none()
+            _ => Task::none(),
         }
     }
 }
