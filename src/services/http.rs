@@ -118,10 +118,10 @@ impl<TRequest: Serialize> HttpService<TRequest> {
     ) -> Result<(), TError> {
         let request = self.build_request(method);
 
-        let s = request.send().await;
-
-        println!("{:?}", s);
-        s.map_err(|e| TError::from(e))?
+        request
+            .send()
+            .await
+            .map_err(|e| TError::from(e))?
             .error_for_status()
             .map_err(|e| TError::from(e))
             .map(|_| ())
