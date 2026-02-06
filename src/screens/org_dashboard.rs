@@ -18,7 +18,7 @@ pub enum Message {
         email: String,
         folder_id: String,
         permission_id: Option<String>,
-    },
+    }
 }
 
 impl Into<ScreenMessage> for Message {
@@ -88,12 +88,26 @@ impl OrgDashboardScreen {
         }
     }
 
-    pub fn toggle_invite_panel(&mut self) {
-        self.show_invite_panel = !self.show_invite_panel;
-    }
-
-    pub fn invite_edit(&mut self, action: text_editor::Action) {
-        self.invite_editor.perform(action);
+    pub fn update(&mut self, message: Message) {
+        match message {
+            Message::InviteMembersClicked => {
+                self.show_invite_panel = !self.show_invite_panel;
+            }
+            Message::InviteEdit(action) => self.invite_editor.perform(action.clone()),
+            Message::RefreshClicked => {
+                self.loading = true;
+                self.error = None;
+            }
+            Message::RemoveAccessClicked { folder_id, .. } => {
+                self.set_removing(&folder_id, true);
+            }
+            Message::InviteDoneClicked => {
+                self.show_invite_panel = false;
+                self.loading = true;
+                self.error = None;
+            }
+            _ => {}
+        }
     }
 
     pub fn invite_begin_run(&mut self) -> Option<u64> {

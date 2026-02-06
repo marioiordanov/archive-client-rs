@@ -22,16 +22,6 @@ impl ArchiveClient {
             (_, OrgMessage::OrgCreated(Ok(root_folder_entry))) => {
                 self.on_org_created_ok(root_folder_entry)
             }
-
-            (
-                Screen::InviteMembers(screen),
-                OrgMessage::InviteUserFinished {
-                    run_id,
-                    email,
-                    result: Ok(()),
-                },
-            ) => Self::on_invite_user_finished_ok(&mut self.app, screen, run_id, email),
-
             (
                 Screen::OrgDashboard(screen),
                 OrgMessage::InviteUserFinished {
@@ -52,15 +42,6 @@ impl ArchiveClient {
                 },
             ) => Self::on_permission_revoked_ok(screen, folder_id),
             (
-                Screen::InviteMembers(_),
-                OrgMessage::InviteUserFinished {
-                    result:
-                        Err(e @ OrgError::Common(app::message::CommonServiceError::TokenExpired)),
-                    ..
-                },
-            ) => self.handle_error(e.into()),
-
-            (
                 Screen::OrgDashboard(_),
                 OrgMessage::InviteUserFinished {
                     result:
@@ -68,16 +49,6 @@ impl ArchiveClient {
                     ..
                 },
             ) => self.handle_error(e.into()),
-
-            (
-                Screen::InviteMembers(screen),
-                OrgMessage::InviteUserFinished {
-                    run_id,
-                    email,
-                    result: Err(e),
-                },
-            ) => Self::on_invite_user_finished_err(screen, &mut self.app, run_id, email, e),
-
             (
                 Screen::OrgDashboard(screen),
                 OrgMessage::InviteUserFinished {
@@ -198,11 +169,7 @@ impl ArchiveClient {
         run_id: u64,
         email: String,
     ) -> Task<Message> {
-        screen.invite_push_history(
-            run_id,
-            email,
-            screens::org_dashboard::InviteStatus::Sent,
-        );
+        screen.invite_push_history(run_id, email, screens::org_dashboard::InviteStatus::Sent);
 
         Self::on_dashboard_invite_user_finished_continue(state, screen, run_id)
     }

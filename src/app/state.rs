@@ -6,7 +6,6 @@ use crate::screens::{self};
 pub enum Screen {
     SignIn(screens::signin::SignInScreen),
     OrgSelection(screens::org_selection::OrgSelectionScreen),
-    InviteMembers(screens::invite_members::InviteMembersScreen),
     OrgDashboard(screens::org_dashboard::OrgDashboardScreen),
 }
 
@@ -15,7 +14,6 @@ impl fmt::Display for Screen {
         match self {
             Screen::SignIn(_) => write!(f, "SignIn"),
             Screen::OrgSelection(_) => write!(f, "OrgSelection"),
-            Screen::InviteMembers(_) => write!(f, "InviteMembers"),
             Screen::OrgDashboard(_) => write!(f, "OrgDashboard"),
         }
     }
@@ -49,6 +47,9 @@ impl AppState {
 
     pub fn is_org_created(&self) -> bool {
         self.org.status == OrgStatus::Ready
+    }
+    pub fn get_org_id(&self) -> &str {
+        &self.org.config.archive_folder_id
     }
 }
 

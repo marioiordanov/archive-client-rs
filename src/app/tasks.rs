@@ -2,11 +2,29 @@ use iced::Task;
 
 use crate::{
     ArchiveClient,
-    app::message::{Message, OrgMessage},
-    services::org::OrgService,
+    app::{
+        self,
+        message::{Message, OrgMessage},
+    },
+    services::{auth::AuthService, org::OrgService},
 };
 
 impl ArchiveClient {
+    pub fn get_access_token_task() -> Task<Message> {
+        Task::perform(AuthService::get_drive_access_token(), |access_token| {
+            Message::Auth(app::message::AuthMessage::AccessTokenReceived(access_token))
+        })
+    }
+    pub fn get_or_create_organization_task(
+        user_email: String,
+        access_token: String,
+    ) -> Task<Message> {
+        Task::perform(
+            OrgService::get_or_create_organization(access_token, user_email),
+            |organization| Message::Org(OrgMessage::OrgCreated(organization)),
+        )
+    }
+
     pub fn fetch_invitations_task(user_email: String, access_token: String) -> Task<Message> {
         Task::perform(
             async move { OrgService::fetch_invitations(&user_email, &access_token).await },

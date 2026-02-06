@@ -8,7 +8,6 @@ use crate::{
         state::{Intent, Screen},
     },
     screens,
-    services::{auth::AuthService, org::OrgService},
 };
 
 impl ArchiveClient {
@@ -22,9 +21,7 @@ impl ArchiveClient {
                 )),
             ) => {
                 screen.update(msg);
-                let task = Task::perform(AuthService::get_drive_access_token(), |access_token| {
-                    Message::Auth(app::message::AuthMessage::AccessTokenReceived(access_token))
-                });
+                let task = ArchiveClient::get_access_token_task();
 
                 (task, None)
             }
@@ -46,74 +43,11 @@ impl ArchiveClient {
                 screen.update(msg.clone());
                 self.app.retry_intent = Some(Intent::CreateOrg);
 
-                let task = Task::perform(
-                    OrgService::get_or_create_organization(
-                        self.app.session.user.access_token.clone(),
-                        self.app.session.user.email.clone(),
-                    ),
-                    |organisation| Message::Org(OrgMessage::OrgCreated(organisation)),
+                let task = ArchiveClient::get_or_create_organization_task(
+                    self.app.session.user.email.clone(),
+                    self.app.session.user.access_token.clone(),
                 );
                 (task, None)
-            }
-            (
-                Screen::InviteMembers(screen),
-                Message::Screen(ScreenMessage::InviteMembers(
-                    screen_msg @ screens::invite_members::Message::Edit(_),
-                )),
-            ) => {
-                screen.update(screen_msg);
-                default
-            }
-            (
-                Screen::InviteMembers(screen),
-                Message::Screen(ScreenMessage::InviteMembers(
-                    screens::invite_members::Message::SendInvitesClicked,
-                )),
-            ) => {
-                let Some(run_id) = screen.begin_run() else {
-                    return default;
-                };
-
-                let Some(email) = screen.pop_next_email() else {
-                    screen.finish_current_email();
-                    return default;
-                };
-
-                let org_id = screen.org_id.clone();
-                let access_token = self.app.session.user.access_token.clone();
-                self.app.retry_intent = Some(Intent::SendInvitations {
-                    run_id: run_id,
-                    org_id: org_id.clone(),
-                    email: email.clone(),
-                });
-
-                (
-                    Self::invite_user_task(run_id, email, org_id, access_token),
-                    None,
-                )
-            }
-            (
-                Screen::InviteMembers(screen),
-                Message::Screen(ScreenMessage::InviteMembers(
-                    screens::invite_members::Message::ContinueClicked,
-                )),
-            ) => {
-                let can_continue = screen.can_continue();
-
-                if !can_continue {
-                    return default;
-                }
-
-                let org_id = self.app.org.config.archive_folder_id.clone();
-                self.screen = Screen::OrgDashboard(
-                    screens::org_dashboard::OrgDashboardScreen::new(org_id.clone()),
-                );
-
-                self.app.retry_intent = Some(Intent::LoadDashboard {
-                    org_id: org_id.clone(),
-                });
-                let access_token = self.app.session.user.access_token.clone();
-                (Self::load_dashboard_task(org_id, access_token), None)
             }
             (
                 Screen::OrgDashboard(screen),
@@ -121,17 +55,16 @@ impl ArchiveClient {
                     msg @ screens::org_dashboard::Message::InviteMembersClicked,
                 )),
             ) => {
-                screen.toggle_invite_panel();
-                let _ = msg;
+                screen.update(msg);
                 default
             }
             (
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
-                    screens::org_dashboard::Message::InviteEdit(action),
+                    msg @ screens::org_dashboard::Message::InviteEdit(_),
                 )),
             ) => {
-                screen.invite_edit(action);
+                screen.update(msg);
                 default
             }
             (
@@ -149,7 +82,7 @@ impl ArchiveClient {
                     return default;
                 };
 
-                let org_id = screen.org_id.clone();
+                let org_id = self.app.get_org_id().to_string();
                 let access_token = self.app.session.user.access_token.clone();
                 self.app.retry_intent = Some(Intent::SendInvitations {
                     run_id,
@@ -165,33 +98,31 @@ impl ArchiveClient {
             (
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
-                    screens::org_dashboard::Message::InviteDoneClicked,
+                    msg @ screens::org_dashboard::Message::InviteDoneClicked,
                 )),
             ) => {
-                if !screen.invite_can_done() {
-                    return default;
+                if screen.invite_can_done() {
+                    screen.update(msg);
+
+                    let org_id = self.app.org.config.archive_folder_id.clone();
+                    let access_token = self.app.session.user.access_token.clone();
+                    self.app.retry_intent = Some(Intent::LoadDashboard {
+                        org_id: org_id.clone(),
+                    });
+                    (Self::load_dashboard_task(org_id, access_token), None)
+                } else {
+                    default
                 }
-
-                screen.show_invite_panel = false;
-                screen.loading = true;
-                screen.error = None;
-
-                let org_id = screen.org_id.clone();
-                let access_token = self.app.session.user.access_token.clone();
-                self.app.retry_intent = Some(Intent::LoadDashboard {
-                    org_id: org_id.clone(),
-                });
-                (Self::load_dashboard_task(org_id, access_token), None)
             }
             (
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
-                    screens::org_dashboard::Message::RefreshClicked,
+                    msg @ screens::org_dashboard::Message::RefreshClicked,
                 )),
             ) => {
-                screen.loading = true;
-                screen.error = None;
-                let org_id = screen.org_id.clone();
+                screen.update(msg);
+
+                let org_id = self.app.get_org_id().to_string();
                 let access_token = self.app.session.user.access_token.clone();
                 self.app.retry_intent = Some(Intent::LoadDashboard {
                     org_id: org_id.clone(),
@@ -209,7 +140,12 @@ impl ArchiveClient {
                     },
                 )),
             ) => {
-                screen.set_removing(&folder_id, true);
+                screen.update(screens::org_dashboard::Message::RemoveAccessClicked {
+                    email: email.clone(),
+                    folder_id: folder_id.clone(),
+                    permission_id: permission_id.clone(),
+                });
+
                 let access_token = self.app.session.user.access_token.clone();
                 (
                     Self::revoke_permission_task(folder_id, email, permission_id, access_token),
