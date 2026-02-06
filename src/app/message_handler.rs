@@ -118,6 +118,74 @@ impl ArchiveClient {
             (
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
+                    msg @ screens::org_dashboard::Message::InviteMembersClicked,
+                )),
+            ) => {
+                screen.toggle_invite_panel();
+                screen.invite_update(&msg);
+                default
+            }
+            (
+                Screen::OrgDashboard(screen),
+                Message::Screen(ScreenMessage::OrgDashboard(
+                    msg @ screens::org_dashboard::Message::InviteEdit(_),
+                )),
+            ) => {
+                screen.invite_update(&msg);
+                default
+            }
+            (
+                Screen::OrgDashboard(screen),
+                Message::Screen(ScreenMessage::OrgDashboard(
+                    screens::org_dashboard::Message::InviteSendClicked,
+                )),
+            ) => {
+                let Some(run_id) = screen.invite_begin_run() else {
+                    return default;
+                };
+
+                let Some(email) = screen.invite_pop_next_email() else {
+                    screen.invite_finish_current_email();
+                    return default;
+                };
+
+                let org_id = screen.org_id.clone();
+                let access_token = self.app.session.user.access_token.clone();
+                self.app.retry_intent = Some(Intent::SendInvitations {
+                    run_id,
+                    org_id: org_id.clone(),
+                    email: email.clone(),
+                });
+
+                (
+                    Self::invite_user_task(run_id, email, org_id, access_token),
+                    None,
+                )
+            }
+            (
+                Screen::OrgDashboard(screen),
+                Message::Screen(ScreenMessage::OrgDashboard(
+                    screens::org_dashboard::Message::InviteDoneClicked,
+                )),
+            ) => {
+                if !screen.invite_can_done() {
+                    return default;
+                }
+
+                screen.show_invite_panel = false;
+                screen.loading = true;
+                screen.error = None;
+
+                let org_id = screen.org_id.clone();
+                let access_token = self.app.session.user.access_token.clone();
+                self.app.retry_intent = Some(Intent::LoadDashboard {
+                    org_id: org_id.clone(),
+                });
+                (Self::load_dashboard_task(org_id, access_token), None)
+            }
+            (
+                Screen::OrgDashboard(screen),
+                Message::Screen(ScreenMessage::OrgDashboard(
                     screens::org_dashboard::Message::RefreshClicked,
                 )),
             ) => {
