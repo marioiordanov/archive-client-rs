@@ -122,16 +122,16 @@ impl ArchiveClient {
                 )),
             ) => {
                 screen.toggle_invite_panel();
-                screen.invite_update(&msg);
+                let _ = msg;
                 default
             }
             (
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
-                    msg @ screens::org_dashboard::Message::InviteEdit(_),
+                    screens::org_dashboard::Message::InviteEdit(action),
                 )),
             ) => {
-                screen.invite_update(&msg);
+                screen.invite_edit(action);
                 default
             }
             (

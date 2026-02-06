@@ -31,6 +31,16 @@ impl ArchiveClient {
                     result: Ok(()),
                 },
             ) => Self::on_invite_user_finished_ok(&mut self.app, screen, run_id, email),
+
+            (
+                Screen::OrgDashboard(screen),
+                OrgMessage::InviteUserFinished {
+                    run_id,
+                    email,
+                    result: Ok(()),
+                },
+            ) => Self::on_dashboard_invite_user_finished_ok(&mut self.app, screen, run_id, email),
+
             (Screen::OrgDashboard(screen), OrgMessage::DashboardLoaded(Ok(rows))) => {
                 Self::on_dashboard_loaded_ok(screen, rows)
             }
@@ -49,6 +59,16 @@ impl ArchiveClient {
                     ..
                 },
             ) => self.handle_error(e.into()),
+
+            (
+                Screen::OrgDashboard(_),
+                OrgMessage::InviteUserFinished {
+                    result:
+                        Err(e @ OrgError::Common(app::message::CommonServiceError::TokenExpired)),
+                    ..
+                },
+            ) => self.handle_error(e.into()),
+
             (
                 Screen::InviteMembers(screen),
                 OrgMessage::InviteUserFinished {
@@ -57,6 +77,17 @@ impl ArchiveClient {
                     result: Err(e),
                 },
             ) => Self::on_invite_user_finished_err(screen, &mut self.app, run_id, email, e),
+
+            (
+                Screen::OrgDashboard(screen),
+                OrgMessage::InviteUserFinished {
+                    run_id,
+                    email,
+                    result: Err(e),
+                },
+            ) => {
+                Self::on_dashboard_invite_user_finished_err(screen, &mut self.app, run_id, email, e)
+            }
 
             (
                 Screen::OrgDashboard(screen),
@@ -99,12 +130,17 @@ impl ArchiveClient {
         };
         LocalStorageService::save_object(&self.app.org, services::local_storage::ObjectType::Org);
 
-        // Forced next step: invite members
+        // Next step: show dashboard with invite panel open
         let org_id = self.app.org.config.archive_folder_id.clone();
-        self.screen =
-            Screen::InviteMembers(screens::invite_members::InviteMembersScreen::new(org_id));
+        let mut screen = screens::org_dashboard::OrgDashboardScreen::new(org_id.clone());
+        screen.show_invite_panel = true;
+        self.screen = Screen::OrgDashboard(screen);
 
-        Task::none()
+        self.app.retry_intent = Some(Intent::LoadDashboard {
+            org_id: org_id.clone(),
+        });
+
+        Self::load_dashboard_task(org_id, self.app.session.user.access_token.clone())
     }
 
     fn on_invite_user_finished_ok(
@@ -152,6 +188,58 @@ impl ArchiveClient {
             Self::invite_user_task(run_id, next_email, org_id, access_token)
         } else {
             screen.finish_current_email();
+            Task::none()
+        }
+    }
+
+    fn on_dashboard_invite_user_finished_ok(
+        state: &mut crate::app::state::AppState,
+        screen: &mut screens::org_dashboard::OrgDashboardScreen,
+        run_id: u64,
+        email: String,
+    ) -> Task<Message> {
+        screen.invite_push_history(
+            run_id,
+            email,
+            screens::org_dashboard::InviteStatus::Sent,
+        );
+
+        Self::on_dashboard_invite_user_finished_continue(state, screen, run_id)
+    }
+
+    fn on_dashboard_invite_user_finished_err(
+        screen: &mut screens::org_dashboard::OrgDashboardScreen,
+        state: &mut AppState,
+        run_id: u64,
+        email: String,
+        error: OrgError,
+    ) -> Task<Message> {
+        screen.invite_push_history(
+            run_id,
+            email,
+            screens::org_dashboard::InviteStatus::Error(error.to_string()),
+        );
+
+        Self::on_dashboard_invite_user_finished_continue(state, screen, run_id)
+    }
+
+    fn on_dashboard_invite_user_finished_continue(
+        state: &mut crate::app::state::AppState,
+        screen: &mut screens::org_dashboard::OrgDashboardScreen,
+        run_id: u64,
+    ) -> Task<Message> {
+        if let Some(next_email) = screen.invite_pop_next_email() {
+            let org_id = screen.org_id.clone();
+            let access_token = state.session.user.access_token.clone();
+            state.retry_intent = Some(Intent::SendInvitations {
+                run_id,
+                org_id: org_id.clone(),
+                email: next_email.clone(),
+            });
+
+            Self::invite_user_task(run_id, next_email, org_id, access_token)
+        } else {
+            screen.invite_finish_current_email();
             Task::none()
         }
     }

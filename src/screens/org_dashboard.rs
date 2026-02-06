@@ -92,11 +92,8 @@ impl OrgDashboardScreen {
         self.show_invite_panel = !self.show_invite_panel;
     }
 
-    pub fn invite_update(&mut self, msg: &Message) {
-        match msg {
-            Message::InviteEdit(action) => self.invite_editor.perform(action.clone()),
-            _ => {}
-        }
+    pub fn invite_edit(&mut self, action: text_editor::Action) {
+        self.invite_editor.perform(action);
     }
 
     pub fn invite_begin_run(&mut self) -> Option<u64> {
