@@ -5,7 +5,7 @@ use reqwest::RequestBuilder;
 use serde::{Serialize, de::DeserializeOwned};
 use url::Url;
 
-use crate::{HTTP, app::message::CommonServiceError};
+use crate::HTTP;
 
 pub struct HttpService<TRequest: Serialize> {
     url: Url,
