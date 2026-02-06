@@ -10,9 +10,9 @@ mod ui_error;
 use crate::{
     app::{
         message::Message,
-        state::{AppState, Intent, Screen, SessionState, UserProfile},
+        state::{AppState, Intent, OrgConfig, OrgState, Screen, SessionState, UserProfile},
     },
-    services::local_storage::LocalStorageService,
+    services::{local_storage::LocalStorageService, org},
 };
 
 lazy_static! {
@@ -44,42 +44,84 @@ impl ArchiveClient {
     fn boot() -> (Self, Task<Message>) {
         println!("Starting Archive Client...");
 
-        let (app, screen, task) = if let Some(profile) =
-            LocalStorageService::load_object::<UserProfile>(
-                services::local_storage::ObjectType::UserProfile,
-            ) {
-            let email = profile.email.clone();
-            let app = AppState {
-                session: SessionState {
-                    user: profile,
-                    role: None,
-                    auth: app::state::AuthState::SignedIn,
-                },
-                org: Default::default(),
-                retry_intent: Some(Intent::FetchInvitations),
-            };
+        let user_profile = LocalStorageService::load_object::<UserProfile>(
+            services::local_storage::ObjectType::UserProfile,
+        );
 
-            let screen =
-                app::state::Screen::OrgSelection(screens::org_selection::OrgSelectionScreen::new());
+        let has_user_profile = user_profile.is_some();
 
-            let access_token = app.session.user.access_token.clone();
+        let org_profile =
+            LocalStorageService::load_object::<OrgState>(services::local_storage::ObjectType::Org);
 
-            (
-                app,
-                screen,
-                ArchiveClient::fetch_invitations_task(email, access_token),
-            )
+        let has_org_profile = org_profile.is_some();
+
+        let org = if let Some(org) = org_profile {
+            org
         } else {
-            let app = AppState {
-                session: Default::default(),
-                org: Default::default(),
-                retry_intent: None,
-            };
-            let screen = app::state::Screen::SignIn(screens::signin::SignInScreen::default());
-            (app, screen, Task::none())
+            OrgState::default()
         };
 
-        (Self { app, screen }, task)
+        let session = if let Some(user) = user_profile {
+            SessionState {
+                user,
+                role: None,
+                auth: app::state::AuthState::SignedIn,
+            }
+        } else {
+            SessionState::default()
+        };
+
+        let (state, screen, next_task) = match (has_user_profile, has_org_profile) {
+            (true, true) => {
+                let next_task = ArchiveClient::load_dashboard_task(
+                    org.config.archive_folder_id.clone(),
+                    session.user.access_token.clone(),
+                );
+                let screen = app::state::Screen::OrgDashboard(
+                    screens::org_dashboard::OrgDashboardScreen::new(
+                        org.config.archive_folder_id.clone(),
+                    ),
+                );
+                let org_id = org.config.archive_folder_id.clone();
+                let state = AppState {
+                    session,
+                    org,
+                    retry_intent: Some(Intent::LoadDashboard { org_id }),
+                };
+
+                (state, screen, next_task)
+            }
+            (true, false) => {
+                let screen = app::state::Screen::OrgSelection(
+                    screens::org_selection::OrgSelectionScreen::new(),
+                );
+
+                let next_task = Self::fetch_invitations_task(
+                    session.user.email.clone(),
+                    session.user.access_token.clone(),
+                );
+
+                let state = AppState {
+                    session,
+                    org,
+                    retry_intent: Some(Intent::FetchInvitations),
+                };
+
+                (state, screen, next_task)
+            }
+            (false, false) => (
+                AppState {
+                    session,
+                    org,
+                    retry_intent: None,
+                },
+                app::state::Screen::SignIn(screens::signin::SignInScreen::default()),
+                Task::none(),
+            ),
+            (false, true) => panic!("Impossible"),
+        };
+
+        (Self { app: state, screen }, next_task)
     }
 
     // update the UI
