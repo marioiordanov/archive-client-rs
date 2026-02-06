@@ -20,6 +20,14 @@ impl ArchiveClient {
         Task::none()
     }
 
+    pub fn retry_intent(&self) -> Task<Message> {
+        if let Some(intent) = self.app.retry_intent.as_ref() {
+            self.run_intent(&intent)
+        }else {
+            Task::none()
+        }
+    }
+
     pub fn run_intent(&self, intent: &Intent) -> Task<Message> {
         let access_token = self.app.session.user.access_token.clone();
         match intent {
