@@ -70,20 +70,19 @@ impl ArchiveClient {
             (
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
-                    screens::org_dashboard::Message::InviteSendClicked,
+                    msg @ screens::org_dashboard::Message::InviteSendClicked,
                 )),
             ) => {
-                let Some(run_id) = screen.invite_begin_run() else {
-                    return default;
-                };
+                screen.update(msg);
 
-                let Some(email) = screen.invite_pop_next_email() else {
-                    screen.invite_finish_current_email();
+                // Decide whether we can kick off the async work:
+                let Some((run_id, email)) = screen.invite_current_task() else {
                     return default;
                 };
 
                 let org_id = self.app.get_org_id().to_string();
                 let access_token = self.app.session.user.access_token.clone();
+
                 self.app.retry_intent = Some(Intent::SendInvitations {
                     run_id,
                     org_id: org_id.clone(),

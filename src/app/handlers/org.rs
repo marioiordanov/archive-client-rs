@@ -169,7 +169,11 @@ impl ArchiveClient {
         run_id: u64,
         email: String,
     ) -> Task<Message> {
-        screen.invite_push_history(run_id, email, screens::org_dashboard::InviteStatus::Sent);
+        screen.update(screens::org_dashboard::Message::RecordInviteInLog {
+            run_id,
+            email,
+            status: screens::org_dashboard::InviteStatus::Sent,
+        });
 
         Self::on_dashboard_invite_user_finished_continue(state, screen, run_id)
     }
@@ -181,11 +185,11 @@ impl ArchiveClient {
         email: String,
         error: OrgError,
     ) -> Task<Message> {
-        screen.invite_push_history(
+        screen.update(screens::org_dashboard::Message::RecordInviteInLog {
             run_id,
             email,
-            screens::org_dashboard::InviteStatus::Error(error.to_string()),
-        );
+            status: screens::org_dashboard::InviteStatus::Error(error.to_string()),
+        });
 
         Self::on_dashboard_invite_user_finished_continue(state, screen, run_id)
     }
@@ -195,8 +199,10 @@ impl ArchiveClient {
         screen: &mut screens::org_dashboard::OrgDashboardScreen,
         run_id: u64,
     ) -> Task<Message> {
-        if let Some(next_email) = screen.invite_pop_next_email() {
-            let org_id = screen.org_id.clone();
+        screen.update(screens::org_dashboard::Message::InviteNextEmail);
+
+        if let Some((_, next_email)) = screen.invite_current_task() {
+            let org_id = state.get_org_id().to_string();
             let access_token = state.session.user.access_token.clone();
             state.retry_intent = Some(Intent::SendInvitations {
                 run_id,
@@ -206,7 +212,7 @@ impl ArchiveClient {
 
             Self::invite_user_task(run_id, next_email, org_id, access_token)
         } else {
-            screen.invite_finish_current_email();
+            screen.update(screens::org_dashboard::Message::InviteFinishEmail);
             Task::none()
         }
     }
@@ -226,7 +232,7 @@ impl ArchiveClient {
             })
             .collect();
 
-        screen.set_rows(screen_rows);
+        screen.update(screens::org_dashboard::Message::DashboardRowsLoaded { rows: screen_rows });
 
         Task::none()
     }
@@ -235,11 +241,8 @@ impl ArchiveClient {
         screen: &mut screens::org_dashboard::OrgDashboardScreen,
         folder_id: String,
     ) -> Task<Message> {
-        screen.set_removing(&folder_id, false);
-
-        if let Some(row) = screen.rows.iter_mut().find(|r| r.folder_id == folder_id) {
-            row.permission_id = None;
-        }
+        screen.update(screens::org_dashboard::Message::StopRemoveAccessAction { folder_id: folder_id.clone() });
+        screen.update(screens::org_dashboard::Message::RemoveAccessRow { folder_id });
 
         Task::none()
     }
@@ -249,8 +252,9 @@ impl ArchiveClient {
         folder_id: String,
         error: OrgError,
     ) -> Task<Message> {
-        screen.set_removing(&folder_id, false);
-        screen.set_error(error.to_string());
+        screen.update(screens::org_dashboard::Message::StopRemoveAccessAction { folder_id: folder_id.clone() });
+        screen.update(screens::org_dashboard::Message::ShowError { error: error.to_string() });
+
         Task::none()
     }
 }

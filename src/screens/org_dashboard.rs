@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::table;
 use iced::widget::{button, column, container, row, scrollable, text, text_editor, tooltip};
-use iced::{Alignment, Border, Color, Element, Length, Theme};
+use iced::{Alignment, Border, Color, Element, Length, Theme, run};
 
 use crate::app::message::ScreenMessage;
 
@@ -18,6 +18,25 @@ pub enum Message {
         email: String,
         folder_id: String,
         permission_id: Option<String>,
+    },
+    InviteNextEmail,
+    InviteFinishEmail,
+    RecordInviteInLog {
+        run_id: u64,
+        email: String,
+        status: InviteStatus,
+    },
+    DashboardRowsLoaded {
+        rows: Vec<DashboardRow>,
+    },
+    StopRemoveAccessAction {
+        folder_id: String,
+    },
+    RemoveAccessRow {
+        folder_id: String,
+    },
+    ShowError {
+        error: String
     }
 }
 
@@ -52,21 +71,21 @@ pub struct InviteHistoryRow {
 
 #[derive(Debug)]
 pub struct OrgDashboardScreen {
-    pub org_id: String,
+    org_id: String,
 
-    pub loading: bool,
-    pub error: Option<String>,
-    pub rows: Vec<DashboardRow>,
+    loading: bool,
+    error: Option<String>,
+    rows: Vec<DashboardRow>,
 
     // Invite panel
     pub show_invite_panel: bool,
-    pub invite_editor: text_editor::Content,
-    pub invite_sending: bool,
-    pub invite_active_run_id: Option<u64>,
-    pub invite_next_run_id: u64,
-    pub invite_queue: VecDeque<String>,
-    pub invite_current_email: Option<String>,
-    pub invite_history: Vec<InviteHistoryRow>,
+    invite_editor: text_editor::Content,
+    invite_sending: bool,
+    invite_active_run_id: Option<u64>,
+    invite_next_run_id: u64,
+    invite_queue: VecDeque<String>,
+    invite_current_email: Option<String>,
+    invite_history: Vec<InviteHistoryRow>,
 }
 
 impl OrgDashboardScreen {
@@ -106,51 +125,64 @@ impl OrgDashboardScreen {
                 self.loading = true;
                 self.error = None;
             }
-            _ => {}
+            Message::InviteSendClicked => {
+                if self.invite_sending {
+                    return;
+                }
+                let emails = parse_emails(&self.invite_editor.text());
+                if emails.is_empty() {
+                    return;
+                }
+                let run_id = self.invite_next_run_id;
+                self.invite_next_run_id += 1;
+
+                self.invite_active_run_id = Some(run_id);
+                self.invite_sending = true;
+                self.invite_queue = emails.into_iter().collect();
+                self.invite_current_email = self.invite_queue.pop_front();
+            }
+            Message::InviteNextEmail => {
+                self.invite_current_email = self.invite_queue.pop_front();
+            }
+            Message::InviteFinishEmail => {
+                self.invite_current_email = None;
+                if self.invite_queue.is_empty() {
+                    self.invite_sending = false;
+                }
+            }
+            Message::RecordInviteInLog {
+                run_id,
+                email,
+                status,
+            } => {
+                self.invite_history.push(InviteHistoryRow {
+                    run_id,
+                    email,
+                    status,
+                });
+            }
+            Message::DashboardRowsLoaded { rows } => {
+                self.set_rows(rows);
+            }
+            Message::StopRemoveAccessAction { folder_id } => {
+                self.set_removing(&folder_id, false);
+            }
+            Message::RemoveAccessRow { folder_id } => {
+                if let Some(row) = self.rows.iter_mut().find(|r| r.folder_id == folder_id) {
+                    row.permission_id = None;
+                }
+            }
+            Message::ShowError { error } => {
+                self.set_error(error);
+            }
         }
     }
 
-    pub fn invite_begin_run(&mut self) -> Option<u64> {
-        if self.invite_sending {
-            return None;
-        }
+    pub fn invite_current_task(&self) -> Option<(u64, String)> {
+        let run_id = self.invite_active_run_id?;
+        let email = self.invite_current_email.clone()?;
 
-        let emails = parse_emails(&self.invite_editor.text());
-        if emails.is_empty() {
-            return None;
-        }
-
-        let run_id = self.invite_next_run_id;
-        self.invite_next_run_id += 1;
-
-        self.invite_active_run_id = Some(run_id);
-        self.invite_sending = true;
-        self.invite_queue = emails.into_iter().collect();
-        self.invite_current_email = None;
-
-        Some(run_id)
-    }
-
-    pub fn invite_pop_next_email(&mut self) -> Option<String> {
-        let email = self.invite_queue.pop_front()?;
-        self.invite_current_email = Some(email.clone());
-        Some(email)
-    }
-
-    pub fn invite_finish_current_email(&mut self) {
-        self.invite_current_email = None;
-
-        if self.invite_queue.is_empty() {
-            self.invite_sending = false;
-        }
-    }
-
-    pub fn invite_push_history(&mut self, run_id: u64, email: String, status: InviteStatus) {
-        self.invite_history.push(InviteHistoryRow {
-            run_id,
-            email,
-            status,
-        });
+        Some((run_id, email))
     }
 
     pub fn invite_current_run_stats(&self) -> (usize, usize) {
@@ -200,18 +232,18 @@ impl OrgDashboardScreen {
         }
     }
 
-    pub fn set_rows(&mut self, rows: Vec<DashboardRow>) {
+    fn set_rows(&mut self, rows: Vec<DashboardRow>) {
         self.rows = rows;
         self.loading = false;
         self.error = None;
     }
 
-    pub fn set_error(&mut self, error: String) {
+    fn set_error(&mut self, error: String) {
         self.loading = false;
         self.error = Some(error);
     }
 
-    pub fn set_removing(&mut self, folder_id: &str, removing: bool) {
+    fn set_removing(&mut self, folder_id: &str, removing: bool) {
         if let Some(row) = self.rows.iter_mut().find(|r| r.folder_id == folder_id) {
             row.removing = removing;
         }
