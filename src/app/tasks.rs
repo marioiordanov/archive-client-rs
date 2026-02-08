@@ -43,7 +43,7 @@ impl ArchiveClient {
             async move {
                 OrgService::invite_user(&email_for_async, &org_id, &access_token)
                     .await
-                    .map(|_| ())
+                    .map(|r| (r.0.id, r.1))
             },
             move |result| {
                 Message::Org(OrgMessage::InviteUserFinished {

@@ -38,6 +38,9 @@ pub enum Message {
     ShowError {
         error: String,
     },
+    AddRow {
+        row: DashboardRow
+    }
 }
 
 impl Into<ScreenMessage> for Message {
@@ -171,6 +174,9 @@ impl OrgDashboardScreen {
             }
             Message::ShowError { error } => {
                 self.set_error(error);
+            }
+            Message::AddRow { row } => {
+                self.rows.push(row);
             }
         }
     }

@@ -8,7 +8,7 @@ use crate::{
         message::{Message, OrgError, OrgMessage},
         state::{AppState, Intent, Screen},
     },
-    screens::{self, invite_members::InviteMembersScreen},
+    screens::{self, org_dashboard::DashboardRow},
     services::{self, local_storage::LocalStorageService},
 };
 
@@ -27,9 +27,9 @@ impl ArchiveClient {
                 OrgMessage::InviteUserFinished {
                     run_id,
                     email,
-                    result: Ok(()),
+                    result: Ok((folder_id, permission_id)),
                 },
-            ) => Self::on_dashboard_invite_user_finished_ok(&mut self.app, screen, run_id, email),
+            ) => Self::on_dashboard_invite_user_finished_ok(&mut self.app, screen, run_id, email, folder_id, permission_id),
 
             (Screen::OrgDashboard(screen), OrgMessage::DashboardLoaded(Ok(rows))) => {
                 Self::on_dashboard_loaded_ok(screen, rows)
@@ -114,66 +114,26 @@ impl ArchiveClient {
         Self::load_dashboard_task(org_id, self.app.session.user.access_token.clone())
     }
 
-    fn on_invite_user_finished_ok(
-        state: &mut crate::app::state::AppState,
-        screen: &mut screens::invite_members::InviteMembersScreen,
-        run_id: u64,
-        email: String,
-    ) -> Task<Message> {
-        screen.push_history(run_id, email, screens::invite_members::InviteStatus::Sent);
-
-        Self::on_invite_user_finished_continue(state, screen, run_id)
-    }
-
-    fn on_invite_user_finished_err(
-        screen: &mut InviteMembersScreen,
-        state: &mut AppState,
-        run_id: u64,
-        email: String,
-        error: OrgError,
-    ) -> Task<Message> {
-        // TODO: on unsuccessful invitation, delete the user folder from the root folder in DRIVE
-        screen.push_history(
-            run_id,
-            email,
-            screens::invite_members::InviteStatus::Error(error.to_string()),
-        );
-
-        Self::on_invite_user_finished_continue(state, screen, run_id)
-    }
-
-    fn on_invite_user_finished_continue(
-        state: &mut crate::app::state::AppState,
-        screen: &mut screens::invite_members::InviteMembersScreen,
-        run_id: u64,
-    ) -> Task<Message> {
-        if let Some(next_email) = screen.pop_next_email() {
-            let org_id = screen.org_id.clone();
-            let access_token = state.session.user.access_token.clone();
-            state.retry_intent = Some(Intent::SendInvitations {
-                run_id,
-                org_id: org_id.clone(),
-                email: next_email.clone(),
-            });
-
-            Self::invite_user_task(run_id, next_email, org_id, access_token)
-        } else {
-            screen.finish_current_email();
-            Task::none()
-        }
-    }
-
     fn on_dashboard_invite_user_finished_ok(
         state: &mut crate::app::state::AppState,
         screen: &mut screens::org_dashboard::OrgDashboardScreen,
         run_id: u64,
         email: String,
+        folder_id: String,
+        permission_id: String
     ) -> Task<Message> {
         screen.update(screens::org_dashboard::Message::RecordInviteInLog {
             run_id,
-            email,
+            email: email.clone(),
             status: screens::org_dashboard::InviteStatus::Sent,
         });
+        screen.update(screens::org_dashboard::Message::AddRow { row: DashboardRow {
+            email,
+            folder_id,
+            active: false,
+            permission_id: Some(permission_id),
+            removing: false,
+        } });
 
         Self::on_dashboard_invite_user_finished_continue(state, screen, run_id)
     }

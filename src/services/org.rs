@@ -107,8 +107,8 @@ impl OrgService {
         user_email: &str,
         organization_id: &str,
         access_token: &str,
-    ) -> Result<RootFolderEntry, OrgError> {
-        let mut map = HashMap::new();
+    ) -> Result<(RootFolderEntry, String), OrgError> {
+        let mut map: HashMap<&str, &str> = HashMap::new();
         map.insert("application", "archive-client");
         map.insert("user", user_email);
 
@@ -133,16 +133,16 @@ impl OrgService {
 
         let mut permissions_url =
             Url::from_str(&format!("{FILES_URL}/{}/permissions", created_file.id)).unwrap();
-        permissions_url.set_query(Some("fields=id,role"));
+        permissions_url.set_query(Some("fields=id"));
         permissions_url.set_query(Some("sendNotificationEmail=false"));
 
         let permissions_result = HttpService::new(permissions_url.as_str())
             .auth(access_token)
             .json_body(permissions_request)
-            .post_no_response::<OrgError>()
+            .post::<serde_json::Value, OrgError>()
             .await;
 
-        match permissions_result {
+        let permission_id = match permissions_result {
             // if email is invalid, delete the folder
             Err(OrgError::InvalidEmailInvitation) => {
                 let _ = HttpService::<()>::new(&format!("{}/{}", FILES_URL, created_file.id))
@@ -155,10 +155,12 @@ impl OrgService {
             Err(e) => {
                 return Err(e);
             }
-            _ => {}
-        }
+            Ok(json_value) => {
+                json_value["id"].to_string()
+            }
+        };
 
-        Ok(created_file)
+        Ok((created_file, permission_id))
     }
     pub async fn fetch_invitations(
         user_email: &str,
