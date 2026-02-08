@@ -103,7 +103,7 @@ impl ArchiveClient {
 
         // Next step: show dashboard with invite panel open
         let org_id = self.app.org.config.archive_folder_id.clone();
-        let mut screen = screens::org_dashboard::OrgDashboardScreen::new(org_id.clone());
+        let mut screen = screens::org_dashboard::OrgDashboardScreen::new();
         screen.show_invite_panel = true;
         self.screen = Screen::OrgDashboard(screen);
 
@@ -241,7 +241,9 @@ impl ArchiveClient {
         screen: &mut screens::org_dashboard::OrgDashboardScreen,
         folder_id: String,
     ) -> Task<Message> {
-        screen.update(screens::org_dashboard::Message::StopRemoveAccessAction { folder_id: folder_id.clone() });
+        screen.update(screens::org_dashboard::Message::StopRemoveAccessAction {
+            folder_id: folder_id.clone(),
+        });
         screen.update(screens::org_dashboard::Message::RemoveAccessRow { folder_id });
 
         Task::none()
@@ -252,8 +254,12 @@ impl ArchiveClient {
         folder_id: String,
         error: OrgError,
     ) -> Task<Message> {
-        screen.update(screens::org_dashboard::Message::StopRemoveAccessAction { folder_id: folder_id.clone() });
-        screen.update(screens::org_dashboard::Message::ShowError { error: error.to_string() });
+        screen.update(screens::org_dashboard::Message::StopRemoveAccessAction {
+            folder_id: folder_id.clone(),
+        });
+        screen.update(screens::org_dashboard::Message::ShowError {
+            error: error.to_string(),
+        });
 
         Task::none()
     }

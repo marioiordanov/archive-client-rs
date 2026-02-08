@@ -10,9 +10,9 @@ mod ui_error;
 use crate::{
     app::{
         message::Message,
-        state::{AppState, Intent, OrgConfig, OrgState, Screen, SessionState, UserProfile},
+        state::{AppState, Intent, OrgState, Screen, SessionState, UserProfile},
     },
-    services::{local_storage::LocalStorageService, org},
+    services::local_storage::LocalStorageService,
 };
 
 lazy_static! {
@@ -79,7 +79,7 @@ impl ArchiveClient {
                 );
                 let screen = app::state::Screen::OrgDashboard(
                     screens::org_dashboard::OrgDashboardScreen::new(
-                        org.config.archive_folder_id.clone(),
+
                     ),
                 );
                 let org_id = org.config.archive_folder_id.clone();

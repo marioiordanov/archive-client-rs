@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::table;
 use iced::widget::{button, column, container, row, scrollable, text, text_editor, tooltip};
-use iced::{Alignment, Border, Color, Element, Length, Theme, run};
+use iced::{Alignment, Border, Color, Element, Length, Theme};
 
 use crate::app::message::ScreenMessage;
 
@@ -36,8 +36,8 @@ pub enum Message {
         folder_id: String,
     },
     ShowError {
-        error: String
-    }
+        error: String,
+    },
 }
 
 impl Into<ScreenMessage> for Message {
@@ -71,8 +71,6 @@ pub struct InviteHistoryRow {
 
 #[derive(Debug)]
 pub struct OrgDashboardScreen {
-    org_id: String,
-
     loading: bool,
     error: Option<String>,
     rows: Vec<DashboardRow>,
@@ -89,9 +87,8 @@ pub struct OrgDashboardScreen {
 }
 
 impl OrgDashboardScreen {
-    pub fn new(org_id: String) -> Self {
+    pub fn new() -> Self {
         Self {
-            org_id,
             loading: true,
             error: None,
             rows: Vec::new(),

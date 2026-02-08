@@ -3,8 +3,7 @@ use iced::Task;
 use crate::{
     ArchiveClient,
     app::{
-        self,
-        message::{Message, OrgMessage, ScreenMessage},
+        message::{Message, ScreenMessage},
         state::{Intent, Screen},
     },
     screens,
