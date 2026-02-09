@@ -1,5 +1,7 @@
 use hyper::StatusCode;
 
+use std::path::PathBuf;
+
 use crate::{
     screens,
     services::{
@@ -14,6 +16,7 @@ pub enum Message {
     Screen(ScreenMessage),
     Auth(AuthMessage),
     Org(OrgMessage),
+    Sync(SyncMessage),
 }
 
 #[derive(Clone, Debug)]
@@ -21,6 +24,7 @@ pub enum ScreenMessage {
     Login(screens::signin::Message),
     OrgSelection(screens::org_selection::Message),
     OrgDashboard(screens::org_dashboard::Message),
+    OrgSync(screens::org_sync::Message),
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +43,30 @@ pub enum OrgMessage {
         folder_id: String,
         result: Result<(), OrgError>,
     },
+}
+
+#[derive(Clone, Debug)]
+pub enum SyncMessage {
+    /// Emitted by the filesystem watcher subscription.
+    FsChanged(PathBuf),
+
+    /// Result of uploading a changed file.
+    UploadFinished {
+        path: String,
+        result: Result<(), SyncError>,
+    },
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum SyncError {
+    #[error("Invalid local folder: {0}")]
+    InvalidLocalFolder(String),
+
+    #[error("I/O error: {0}")]
+    Io(String),
+
+    #[error(transparent)]
+    Common(#[from] CommonServiceError),
 }
 
 #[derive(Clone, Debug)]

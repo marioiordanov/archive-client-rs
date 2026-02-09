@@ -95,11 +95,17 @@ impl ArchiveClient {
         root_folder_entry: services::org::RootFolderEntry,
     ) -> Task<Message> {
         self.app.org.status = app::state::OrgStatus::Ready;
+        self.app.session.user.role = Some(app::state::Role::Owner);
         self.app.org.config = app::state::OrgConfig {
             archive_folder_id: root_folder_entry.id,
             archive_folder_name: root_folder_entry.name,
+            local_folder_path: None,
         };
         LocalStorageService::save_object(&self.app.org, services::local_storage::ObjectType::Org);
+        LocalStorageService::save_object(
+            &self.app.session.user,
+            services::local_storage::ObjectType::UserProfile,
+        );
 
         // Next step: show dashboard with invite panel open
         let org_id = self.app.org.config.archive_folder_id.clone();

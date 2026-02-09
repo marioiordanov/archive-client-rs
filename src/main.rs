@@ -1,4 +1,6 @@
-use iced::{Element, Task};
+use std::path::PathBuf;
+
+use iced::{Element, Subscription, Task};
 use lazy_static::lazy_static;
 
 mod app;
@@ -10,7 +12,7 @@ mod ui_error;
 use crate::{
     app::{
         message::Message,
-        state::{AppState, Intent, OrgState, Screen, SessionState, UserProfile},
+        state::{AppState, Intent, OrgState, Role, Screen, SessionState, UserProfile},
     },
     services::local_storage::LocalStorageService,
 };
@@ -32,6 +34,7 @@ fn main() -> iced::Result {
         ArchiveClient::view,
     )
     .centered()
+    .subscription(ArchiveClient::subscription)
     .run()
 }
 
@@ -61,10 +64,9 @@ impl ArchiveClient {
             OrgState::default()
         };
 
-        let session = if let Some(user) = user_profile {
+        let mut session = if let Some(user) = user_profile {
             SessionState {
                 user,
-                role: None,
                 auth: app::state::AuthState::SignedIn,
             }
         } else {
@@ -73,23 +75,63 @@ impl ArchiveClient {
 
         let (state, screen, next_task) = match (has_user_profile, has_org_profile) {
             (true, true) => {
-                let next_task = ArchiveClient::load_dashboard_task(
-                    org.config.archive_folder_id.clone(),
-                    session.user.access_token.clone(),
-                );
-                let screen = app::state::Screen::OrgDashboard(
-                    screens::org_dashboard::OrgDashboardScreen::new(
-
-                    ),
-                );
-                let org_id = org.config.archive_folder_id.clone();
-                let state = AppState {
-                    session,
-                    org,
-                    retry_intent: Some(Intent::LoadDashboard { org_id }),
+                // Role belongs to the user, not the organization.
+                // Backward-compat heuristic if role is missing:
+                // - if a local folder is mapped, treat as member/user
+                // - otherwise treat as owner
+                let role_was_none = session.user.role.is_none();
+                let inferred_role = match session.user.role.clone() {
+                    Some(r) => Some(r),
+                    None if org.config.local_folder_path.is_some() => Some(Role::User),
+                    None => Some(Role::Owner),
                 };
 
-                (state, screen, next_task)
+                session.user.role = inferred_role;
+
+                if role_was_none {
+                    LocalStorageService::save_object(
+                        &session.user,
+                        services::local_storage::ObjectType::UserProfile,
+                    );
+                }
+
+                match session.user.role.as_ref() {
+                    Some(Role::Owner) => {
+                        let next_task = ArchiveClient::load_dashboard_task(
+                            org.config.archive_folder_id.clone(),
+                            session.user.access_token.clone(),
+                        );
+                        let screen = app::state::Screen::OrgDashboard(
+                            screens::org_dashboard::OrgDashboardScreen::new(),
+                        );
+                        let org_id = org.config.archive_folder_id.clone();
+                        let state = AppState {
+                            session,
+                            org,
+                            retry_intent: Some(Intent::LoadDashboard { org_id }),
+                        };
+
+                        (state, screen, next_task)
+                    }
+                    Some(Role::User) => {
+                        let mapped = org.config.local_folder_path.clone();
+                        let screen = app::state::Screen::OrgSync(
+                            screens::org_sync::OrgSyncScreen::new(mapped),
+                        );
+
+                        let state = AppState {
+                            session,
+                            org,
+                            retry_intent: None,
+                        };
+
+                        (state, screen, Task::none())
+                    }
+                    None => {
+                        // Should be unreachable due to inference above.
+                        panic!("Should be unreachable");
+                    }
+                }
             }
             (true, false) => {
                 let screen = app::state::Screen::OrgSelection(
@@ -136,8 +178,24 @@ impl ArchiveClient {
             app::state::Screen::OrgDashboard(screen) => {
                 screen.view().map(|m| Message::Screen(m.into()))
             }
+            app::state::Screen::OrgSync(screen) => screen
+                .view(&self.app.org.config.archive_folder_name)
+                .map(|m| Message::Screen(m.into())),
         };
 
         contents.into()
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        match &self.screen {
+            Screen::OrgSync(screen) if screen.watching => {
+                let Some(mapped) = self.app.org.config.local_folder_path.as_ref() else {
+                    return Subscription::none();
+                };
+
+                crate::app::subscriptions::fs_watch_subscription(PathBuf::from(mapped))
+            }
+            _ => Subscription::none(),
+        }
     }
 }

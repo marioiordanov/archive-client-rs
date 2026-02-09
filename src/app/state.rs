@@ -7,6 +7,7 @@ pub enum Screen {
     SignIn(screens::signin::SignInScreen),
     OrgSelection(screens::org_selection::OrgSelectionScreen),
     OrgDashboard(screens::org_dashboard::OrgDashboardScreen),
+    OrgSync(screens::org_sync::OrgSyncScreen),
 }
 
 impl fmt::Display for Screen {
@@ -15,6 +16,7 @@ impl fmt::Display for Screen {
             Screen::SignIn(_) => write!(f, "SignIn"),
             Screen::OrgSelection(_) => write!(f, "OrgSelection"),
             Screen::OrgDashboard(_) => write!(f, "OrgDashboard"),
+            Screen::OrgSync(_) => write!(f, "OrgSync"),
         }
     }
 }
@@ -56,10 +58,10 @@ impl AppState {
 #[derive(Default)]
 pub struct SessionState {
     pub user: UserProfile,
-    pub role: Option<Role>,
     pub auth: AuthState,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Role {
     Owner,
     User,
@@ -80,18 +82,26 @@ pub struct UserProfile {
     pub refresh_token: String,
     pub expires_at: u64,
     pub token_type: String,
+
+    #[serde(default)]
+    pub role: Option<Role>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct OrgState {
     pub config: OrgConfig,
     pub status: OrgStatus,
 }
 
 #[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct OrgConfig {
     pub archive_folder_id: String,   // Drive folder ID (source of truth)
     pub archive_folder_name: String, // cached display
+
+    /// Local folder mapped to this org folder. Used by the member sync flow.
+    pub local_folder_path: Option<String>,
 }
 
 #[derive(Default, PartialEq, Eq, Serialize, Deserialize)]

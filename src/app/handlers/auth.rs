@@ -50,6 +50,9 @@ fn on_access_token_received_ok(
     let email =
         services::auth::AuthService::extract_email_from_access_token(&access_token.id_token);
 
+    // Preserve any previously-known role (e.g. if the user re-auths).
+    let role = state.session.user.role.clone();
+
     let user_email = email.clone();
     let user_profile = UserProfile {
         email,
@@ -66,6 +69,7 @@ fn on_access_token_received_ok(
             + access_token.expires_in,
         token_type: access_token.token_type,
         access_token: access_token.access_token,
+        role,
     };
 
     LocalStorageService::save_object(

@@ -4,9 +4,10 @@ use crate::{
     ArchiveClient,
     app::{
         message::{Message, ScreenMessage},
-        state::{Intent, Screen},
+        state::{Intent, Role, Screen},
     },
     screens,
+    services::local_storage::{LocalStorageService, ObjectType},
 };
 
 impl ArchiveClient {
@@ -33,6 +34,7 @@ impl ArchiveClient {
             }
             (_, Message::Auth(auth_msg)) => (self.handle_auth_messages(auth_msg), None),
             (_, Message::Org(org_msg)) => (self.handle_org_messages(org_msg), None),
+            (_, Message::Sync(sync_msg)) => (self.handle_sync_messages(sync_msg), None),
             (
                 Screen::OrgSelection(screen),
                 Message::Screen(ScreenMessage::OrgSelection(
@@ -47,6 +49,34 @@ impl ArchiveClient {
                     self.app.session.user.access_token.clone(),
                 );
                 (task, None)
+            }
+            (
+                Screen::OrgSelection(screen),
+                Message::Screen(ScreenMessage::OrgSelection(
+                    screens::org_selection::Message::JoinOrgClicked { org_id, org_name },
+                )),
+            ) => {
+                // Update the selection screen state (shows loading) immediately.
+                screen.update(screens::org_selection::Message::JoinOrgClicked {
+                    org_id: org_id.clone(),
+                    org_name: org_name.clone(),
+                });
+
+                self.app.org.status = crate::app::state::OrgStatus::Ready;
+                self.app.session.user.role = Some(Role::User);
+                self.app.org.config.archive_folder_id = org_id;
+                self.app.org.config.archive_folder_name = org_name;
+                // Keep any existing mapping if present (e.g. user re-joins same org id).
+
+                LocalStorageService::save_object(&self.app.org, ObjectType::Org);
+                LocalStorageService::save_object(&self.app.session.user, ObjectType::UserProfile);
+
+                self.app.retry_intent = None;
+                self.screen = Screen::OrgSync(screens::org_sync::OrgSyncScreen::new(
+                    self.app.org.config.local_folder_path.clone(),
+                ));
+
+                default
             }
             (
                 Screen::OrgDashboard(screen),
@@ -149,6 +179,73 @@ impl ArchiveClient {
                     Self::revoke_permission_task(folder_id, email, permission_id, access_token),
                     None,
                 )
+            }
+            (
+                Screen::OrgSync(screen),
+                Message::Screen(ScreenMessage::OrgSync(msg @ screens::org_sync::Message::LocalFolderChanged(_))),
+            ) => {
+                screen.update(msg);
+                default
+            }
+            (
+                Screen::OrgSync(screen),
+                Message::Screen(ScreenMessage::OrgSync(msg @ screens::org_sync::Message::ClearLogClicked)),
+            ) => {
+                screen.update(msg);
+                default
+            }
+            (
+                Screen::OrgSync(screen),
+                Message::Screen(ScreenMessage::OrgSync(msg @ screens::org_sync::Message::StopWatchingClicked)),
+            ) => {
+                screen.update(msg);
+                default
+            }
+            (
+                Screen::OrgSync(screen),
+                Message::Screen(ScreenMessage::OrgSync(msg @ screens::org_sync::Message::SaveMappingClicked)),
+            ) => {
+                screen.update(msg);
+
+                let input = screen.local_folder_input.trim().to_string();
+                if input.is_empty() {
+                    screen.status_line = Some("Enter a folder path first.".to_string());
+                    return default;
+                }
+
+                let path = std::path::PathBuf::from(&input);
+                if !path.exists() || !path.is_dir() {
+                    screen.status_line = Some("Folder does not exist (or is not a directory).".to_string());
+                    return default;
+                }
+
+                self.app.org.config.local_folder_path = Some(input.clone());
+                screen.mapped_folder = Some(input);
+                LocalStorageService::save_object(&self.app.org, ObjectType::Org);
+
+                default
+            }
+            (
+                Screen::OrgSync(screen),
+                Message::Screen(ScreenMessage::OrgSync(msg @ screens::org_sync::Message::StartWatchingClicked)),
+            ) => {
+                // Best-effort: auto-save mapping if it's valid.
+                let input = screen.local_folder_input.trim().to_string();
+                let path = std::path::PathBuf::from(&input);
+                if input.is_empty() || !path.exists() || !path.is_dir() {
+                    screen.status_line = Some("Set a valid local folder path first.".to_string());
+                    screen.watching = false;
+                    return default;
+                }
+
+                if self.app.org.config.local_folder_path.as_deref() != Some(&input) {
+                    self.app.org.config.local_folder_path = Some(input.clone());
+                    screen.mapped_folder = Some(input);
+                    LocalStorageService::save_object(&self.app.org, ObjectType::Org);
+                }
+
+                screen.update(msg);
+                default
             }
             _ => default,
         }

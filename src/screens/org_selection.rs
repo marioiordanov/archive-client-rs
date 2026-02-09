@@ -43,7 +43,10 @@ impl OrgSelectionScreen {
                             )
                             .padding(12)
                             .width(Length::Fill)
-                            .on_press(Message::JoinOrgClicked(invitation.org_id.clone())),
+                            .on_press(Message::JoinOrgClicked {
+                                org_id: invitation.org_id.clone(),
+                                org_name: invitation.org_name.clone(),
+                            }),
                         )
                     });
 
@@ -87,7 +90,9 @@ impl OrgSelectionScreen {
                 self.invitations = vec![];
                 self.loading = true;
             }
-            Message::JoinOrgClicked(_) => todo!(),
+            Message::JoinOrgClicked { .. } => {
+                self.loading = true;
+            }
         }
     }
 }
@@ -95,7 +100,7 @@ impl OrgSelectionScreen {
 #[derive(Clone, Debug)]
 pub enum Message {
     CreateOrgClicked,
-    JoinOrgClicked(String),
+    JoinOrgClicked { org_id: String, org_name: String },
 }
 
 impl Into<ScreenMessage> for Message {
