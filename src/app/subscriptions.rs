@@ -3,49 +3,37 @@ use std::path::PathBuf;
 use iced::Subscription;
 use iced::futures::{SinkExt, StreamExt};
 use iced::stream;
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
-use crate::app::message::{Message, SyncMessage};
+use crate::app::message::{Message};
 
 pub fn fs_watch_subscription(root: PathBuf) -> Subscription<Message> {
-    println!("fs_watch_subscription");
-    Subscription::run_with(root, fs_watch_stream)
+    println!("start watching");
+    Subscription::run_with(root, fs_watch)
 }
 
-fn fs_watch_stream(root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Message> {
-    let root = root.clone();
-
+fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Message> {
+    let dir_root = dir_root.clone();
+    // `stream::channel` expects a closure that returns an async block (a Future)
+    // whose output type is `()`. Use `move |mut output| async move { ... }`
+    // and ignore the `Result` from `send` so the block returns `()`.
     stream::channel(
         100,
         move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
-            let (tx, mut rx) = iced::futures::channel::mpsc::unbounded::<PathBuf>();
+            let (mut w, mut events) = fs_watcher::AsyncWatcher::spawn(dir_root.as_path()).await.unwrap();
 
-            let mut watcher = match RecommendedWatcher::new(
-                move |res: Result<notify::Event, notify::Error>| {
-                    if let Ok(event) = res {
-                        match event.kind {
-                            EventKind::Create(_) | EventKind::Modify(_) => {
-                                for path in event.paths {
-                                    let _ = tx.unbounded_send(path);
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                },
-                notify::Config::default(),
-            ) {
-                Ok(w) => w,
-                Err(_) => return,
-            };
-
-            if watcher.watch(&root, RecursiveMode::Recursive).is_err() {
-                return;
+            while let Some(event_result) = events.next().await {
+                match event_result {
+                    Ok(event) => {
+                        println!("{event:?}");
+                        let _ = output.send(Message::Test).await;
+                    },
+                    Err(e) => {
+                        println!("Stream closed due to {e:?}");
+                        break;
+                    },
+                }
             }
-
-            while let Some(path) = rx.next().await {
-                let _ = output.send(Message::Sync(SyncMessage::FsChanged(path))).await;
-            }
+            let _ = w.stop().await;
         },
     )
     .boxed()
