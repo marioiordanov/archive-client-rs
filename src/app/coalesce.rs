@@ -26,7 +26,6 @@
 //! correctly to `MoveAndUpload(b)`.
 
 use std::{collections::HashMap, path::PathBuf};
-
 use crate::app::message::SyncAction;
 
 #[derive(Clone)]
@@ -126,9 +125,6 @@ impl<'a> EventsHandler<'a> {
                             out.push(SyncAction::Delete(PathBuf::from(path)));
                         }
                     }
-                }
-                _ => {
-                    println!("Unhandled case");
                 }
             }
         }
@@ -230,6 +226,7 @@ mod tests {
                 "move_and_upload".to_string(),
                 format!("{}->{}", from.display(), to.display()),
             ),
+            SyncAction::MoveFolder { from, to } |
             SyncAction::Move { from, to } => (
                 "move".to_string(),
                 format!("{}->{}", from.display(), to.display()),
@@ -279,7 +276,7 @@ mod tests {
         vec![ExpectedAction::Delete("a.txt")]
     )]
     #[case::rename_file(
-        vec![Event::Renamed {
+        vec![Event::FileRenamed{
             from: "old.txt".into(),
             to: "new.txt".into(),
         }],
@@ -340,7 +337,7 @@ mod tests {
     #[rstest]
     #[case::rename_then_modify(
         vec![
-            Event::Renamed {
+            Event::FileRenamed {
                 from: "a.txt".into(),
                 to: "b.txt".into(),
             },
@@ -350,7 +347,7 @@ mod tests {
     )]
     #[case::rename_then_removed_destination(
         vec![
-            Event::Renamed {
+            Event::FileRenamed {
                 from: "a.txt".into(),
                 to: "b.txt".into(),
             },
@@ -360,11 +357,11 @@ mod tests {
     )]
     #[case::rename_chain(
         vec![
-            Event::Renamed {
+            Event::FileRenamed {
                 from: "a.txt".into(),
                 to: "b.txt".into(),
             },
-            Event::Renamed {
+            Event::FileRenamed {
                 from: "b.txt".into(),
                 to: "c.txt".into(),
             },
@@ -373,11 +370,11 @@ mod tests {
     )]
     #[case::rename_chain_then_modify_terminal(
         vec![
-            Event::Renamed {
+            Event::FileRenamed {
                 from: "a.txt".into(),
                 to: "b.txt".into(),
             },
-            Event::Renamed {
+            Event::FileRenamed {
                 from: "b.txt".into(),
                 to: "c.txt".into(),
             },
@@ -387,11 +384,11 @@ mod tests {
     )]
     #[case::rename_swap_back(
         vec![
-            Event::Renamed {
+            Event::FileRenamed {
                 from: "a.txt".into(),
                 to: "b.txt".into(),
             },
-            Event::Renamed {
+            Event::FileRenamed {
                 from: "b.txt".into(),
                 to: "a.txt".into(),
             },
