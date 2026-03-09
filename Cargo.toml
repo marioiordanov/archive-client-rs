@@ -27,3 +27,6 @@ fs_watcher = { path = "../test-watcher"}
 [features]
 default = ["mock_org"]
 mock_org = []
+
+[dev-dependencies]
+rstest = "0.26.1"
