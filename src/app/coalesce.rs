@@ -19,24 +19,21 @@
 //! | * → Created/Added | `EnsureFolder` |
 //!
 //! ### Renames
-//! Rename chains are collapsed: `a→b, b→c` becomes `Delete(a) + Upload(c)`.
+//! Rename chains are collapsed: `a→b, b→c` becomes `Renamed{a->c}`.
 //! A swap-back `a→b, b→a` becomes `NoOp`.
 //! Non-rename events are remapped to the final canonical path before
 //! lifecycle reduction, so `Renamed{a→b} + Modified(b)` collapses
-//! correctly to `Delete(a) + Upload(b)`.
+//! correctly to `MoveAndUpload(b)`.
 
-use std::{
-    collections::HashMap,
-    path::{ PathBuf},
-};
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::app::message::SyncAction;
 
 #[derive(Clone)]
 enum Action<'a> {
-    Rename { to: &'a String },
-    Modify,
-    Remove,
+    Rename { to: &'a String, is_folder: bool },
+    Modify { is_folder: bool },
+    Remove { is_folder: bool },
 }
 
 pub(crate) struct EventsHandler<'a> {
@@ -56,42 +53,82 @@ impl<'a> EventsHandler<'a> {
     pub(crate) fn process(mut self, events: &'a [fs_watcher::Event]) -> Vec<SyncAction> {
         for ev in events.iter() {
             match ev {
-                fs_watcher::Event::Renamed { from, to } => self.rename(from, to),
+                fs_watcher::Event::FolderRenamed { from, to } => self.rename(from, to, true),
+                fs_watcher::Event::FileRenamed { from, to } => self.rename(from, to, false),
                 fs_watcher::Event::FileAdded(filename)
                 | fs_watcher::Event::FileCreated(filename)
                 | fs_watcher::Event::FileModified(filename) => {
-                    self.map.insert(filename, Action::Modify);
+                    self.map
+                        .insert(filename, Action::Modify { is_folder: false });
                 }
                 fs_watcher::Event::FileRemoved(filename) => {
-                    self.map.insert(filename, Action::Remove);
+                    self.map
+                        .insert(filename, Action::Remove { is_folder: false });
                 }
-                fs_watcher::Event::FolderAdded(_)
-                | fs_watcher::Event::FolderCreated(_)
-                | fs_watcher::Event::FolderRemoved(_) => {}
+                fs_watcher::Event::FolderAdded(folder)
+                | fs_watcher::Event::FolderCreated(folder) => {
+                    self.map.insert(folder, Action::Modify { is_folder: true });
+                }
+                fs_watcher::Event::FolderRemoved(folder) => {
+                    self.map.insert(folder, Action::Remove { is_folder: true });
+                }
             }
         }
         let mut out = Vec::new();
 
         for (path, action) in self.map.iter() {
             match action {
-                Action::Rename { to } => {
-                    match self.map.get(to) {
-                        Some(Action::Modify) => out.push(SyncAction::MoveAndUpload { from: PathBuf::from(path), to: PathBuf::from(to) }),
-                        Some(Action::Remove) => out.push(SyncAction::Delete(PathBuf::from(path))),
-                        _ => out.push(SyncAction::Move { from: PathBuf::from(path), to: PathBuf::from(to) }),
+                Action::Rename {
+                    to,
+                    is_folder: false,
+                } => match self.map.get(to) {
+                    Some(Action::Modify { is_folder: false }) => {
+                        out.push(SyncAction::MoveAndUpload {
+                            from: PathBuf::from(path),
+                            to: PathBuf::from(to),
+                        })
                     }
-                }
-                Action::Modify => {
+                    Some(Action::Remove { is_folder: false }) => {
+                        out.push(SyncAction::Delete(PathBuf::from(path)))
+                    }
+                    _ => out.push(SyncAction::Move {
+                        from: PathBuf::from(path),
+                        to: PathBuf::from(to),
+                    }),
+                },
+                Action::Rename {
+                    to,
+                    is_folder: true,
+                } => match self.map.get(to) {
+                    Some(Action::Remove { is_folder: true }) => {
+                        out.push(SyncAction::RemoveFolder(PathBuf::from(path)))
+                    }
+                    _ => out.push(SyncAction::MoveFolder {
+                        from: PathBuf::from(path),
+                        to: PathBuf::from(to),
+                    }),
+                },
+                Action::Modify { is_folder: false } => {
                     // Skip modify if this path is a rename destination;
                     // it is already covered by MoveAndUpsert.
                     if !self.reverse_link.contains_key(*path) {
                         out.push(SyncAction::Upload(PathBuf::from(path)));
                     }
                 }
-                Action::Remove => {
+                Action::Modify { is_folder: true } => {
+                    out.push(SyncAction::EnsureFolder(PathBuf::from(path)));
+                }
+                Action::Remove { is_folder } => {
                     if !self.reverse_link.contains_key(*path) {
-                        out.push(SyncAction::Delete(PathBuf::from(path)));
+                        if *is_folder {
+                            out.push(SyncAction::RemoveFolder(PathBuf::from(path)));
+                        } else {
+                            out.push(SyncAction::Delete(PathBuf::from(path)));
+                        }
                     }
+                }
+                _ => {
+                    println!("Unhandled case");
                 }
             }
         }
@@ -99,16 +136,13 @@ impl<'a> EventsHandler<'a> {
         out
     }
 
-    // a->b , b->a
-    // b->c
-    //
-    fn rename(&mut self, from: &'a String, to: &'a String) {
+    fn rename(&mut self, from: &'a String, to: &'a String, is_folder: bool) {
         let from_entry = self.map.get(from);
         let link_to_from_option = self.reverse_link.get(from).copied();
 
         match (from_entry, link_to_from_option) {
             (None, None) => {
-                self.map.insert(from, Action::Rename { to });
+                self.map.insert(from, Action::Rename { to, is_folder });
                 self.reverse_link.insert(to, from);
             }
             (None, Some(reverse_link)) if reverse_link == to => {
@@ -118,7 +152,10 @@ impl<'a> EventsHandler<'a> {
             }
             // collapse path
             (None, Some(link_to_from)) => {
-                if let Some(Action::Rename { to: forward_link }) = self.map.get_mut(link_to_from) {
+                if let Some(Action::Rename {
+                    to: forward_link, ..
+                }) = self.map.get_mut(link_to_from)
+                {
                     self.reverse_link.remove(from);
                     *forward_link = to;
                     self.reverse_link.insert(to, link_to_from);
@@ -130,12 +167,17 @@ impl<'a> EventsHandler<'a> {
                 self.map.remove(from);
                 self.reverse_link.remove(from);
 
-                if let Some(Action::Rename { to: forward_link }) = self.map.get_mut(link_to_from) {
+                if let Some(Action::Rename {
+                    to: forward_link, ..
+                }) = self.map.get_mut(link_to_from)
+                {
                     *forward_link = to;
                     self.reverse_link.insert(to, link_to_from);
                 }
             }
-            _ => todo!(),
+            _ => {
+                println!("Unhandled case");
+            }
         }
     }
 }
