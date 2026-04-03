@@ -1,182 +1,704 @@
-//! Event coalescing: maps raw FS watcher events (within one debounce window)
-//! to canonical [`SyncAction`]s according to the
-//! `FS_EVENT_DRIVE_ACTION_MATRIX.md` specification.
-//!
-//! ## Summary of rules
-//!
-//! ### Files
-//! | First → Last | Result |
-//! |---|---|
-//! | Created/Added → Removed | `NoOp` (transient file) |
-//! | * → Removed | `Delete` |
-//! | * → Created/Added/Modified | `Upload` |
-//!
-//! ### Folders
-//! | First → Last | Result |
-//! |---|---|
-//! | Created/Added → Removed | `NoOp` (transient folder) |
-//! | * → Removed | `RemoveFolder` |
-//! | * → Created/Added | `EnsureFolder` |
-//!
-//! ### Renames
-//! Rename chains are collapsed: `a→b, b→c` becomes `Renamed{a->c}`.
-//! A swap-back `a→b, b→a` becomes `NoOp`.
-//! Non-rename events are remapped to the final canonical path before
-//! lifecycle reduction, so `Renamed{a→b} + Modified(b)` collapses
-//! correctly to `MoveAndUpload(b)`.
+use std::{collections::{BTreeMap, HashMap}, path::Path};
 
-use std::{collections::HashMap, path::PathBuf};
-use crate::app::message::SyncAction;
+use fs_watcher::Event;
 
-#[derive(Clone)]
-enum Action<'a> {
-    Rename { to: &'a String, is_folder: bool },
-    Modify { is_folder: bool },
-    Remove { is_folder: bool },
-}
+use crate::app::{fs_index::FsIndex, message::SyncAction};
 
-pub(crate) struct EventsHandler<'a> {
-    map: HashMap<&'a String, Action<'a>>,
-    // from string to the entry in map
-    reverse_link: HashMap<&'a String, &'a String>,
-}
+#[derive(Clone, Copy)]
+    struct BitFlag(u8);
+    const RENAMED: BitFlag = BitFlag(0b00001);
+    const MODIFIED: BitFlag = BitFlag(0b00010);
+    const REMOVED: BitFlag = BitFlag(0b00100);
+    const CREATED: BitFlag = BitFlag(0b01000);
+    const ADDED: BitFlag = BitFlag(0b10000);
+    const REPLACED: BitFlag = BitFlag(0b100000);
 
-impl<'a> EventsHandler<'a> {
-    pub(crate) fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-            reverse_link: HashMap::new(),
+    impl BitFlag {
+        fn has_flag(&self, flag: BitFlag) -> bool {
+            (self.0 & flag.0) != 0
+        }
+
+        fn is_renamed(&self) -> bool {
+            self.has_flag(RENAMED)
+        }
+
+        fn is_modified(&self) -> bool {
+            self.has_flag(MODIFIED)
+        }
+
+        fn is_removed(&self) -> bool {
+            self.has_flag(REMOVED)
+        }
+
+        fn is_created(&self) -> bool {
+            self.has_flag(CREATED)
+        }
+
+        fn is_added(&self) -> bool {
+            self.has_flag(ADDED)
+        }
+
+        fn is_replaced(&self) -> bool {
+            self.has_flag(REPLACED)
+        }
+
+        fn merge(&mut self, flag: BitFlag) {
+            self.0 |= flag.0;
+        }
+
+        fn remove_flag(&mut self, flag: BitFlag) {
+            self.0 &= !flag.0
+        }
+
+        fn has_any_flag(&self) -> bool {
+            self.0 > 0
         }
     }
 
-    pub(crate) fn process(mut self, events: &'a [fs_watcher::Event]) -> Vec<SyncAction> {
-        for ev in events.iter() {
-            match ev {
-                fs_watcher::Event::FolderRenamed { from, to } => self.rename(from, to, true),
-                fs_watcher::Event::FileRenamed { from, to } => self.rename(from, to, false),
-                fs_watcher::Event::FileAdded(filename)
-                | fs_watcher::Event::FileCreated(filename)
-                | fs_watcher::Event::FileModified(filename) => {
-                    self.map
-                        .insert(filename, Action::Modify { is_folder: false });
+    impl std::fmt::Debug for BitFlag {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut flags = vec![];
+            if self.is_renamed() {
+                flags.push("renamed");
+            }
+
+            if self.is_added() {
+                flags.push("added");
+            }
+
+            if self.is_created() {
+                flags.push("created");
+            }
+
+            if self.is_removed() {
+                flags.push("removed");
+            }
+
+            if self.is_modified() {
+                flags.push("modified");
+            }
+
+            if self.is_replaced() {
+                flags.push("replaced");
+            }
+
+            f.debug_list().entries(flags.iter()).finish()
+        }
+    }
+
+    #[derive(Debug)]
+    struct IdEntry<'a> {
+        action: BitFlag,
+        initial_path: &'a Path,
+        initial_inode: u64,
+        is_folder: bool,
+        current_path: &'a Path,
+        current_inode: u64,
+    }
+
+    struct EventsTransaction<'a> {
+        initial_state: &'a FsIndex,
+        path_to_id: HashMap<&'a Path, Id>,
+        inode_to_id: HashMap<u64, Id>,
+        id_to_entry: BTreeMap<Id, IdEntry<'a>>,
+        last_id: u32,
+    }
+
+    impl<'a> EventsTransaction<'a> {
+        fn new(initial_state: &'a FsIndex) -> Self {
+            Self {
+                initial_state,
+                path_to_id: HashMap::new(),
+                inode_to_id: HashMap::new(),
+                id_to_entry: BTreeMap::new(),
+                last_id: 0,
+            }
+        }
+
+        fn get_new_id(&mut self) -> u32 {
+            self.last_id += 1;
+            self.last_id
+        }
+
+        fn append_event(&mut self, event: &'a Event) {
+            match event {
+                Event::FileCreated(path, inode) => self.append_created_file(path.as_path(), *inode),
+                Event::FileRemoved(path_buf, inode) => {
+                    self.append_removed_file(path_buf.as_path(), *inode)
                 }
-                fs_watcher::Event::FileRemoved(filename) => {
-                    self.map
-                        .insert(filename, Action::Remove { is_folder: false });
+                Event::FileAdded(path_buf, inode) => {
+                    self.append_added_file(path_buf.as_path(), *inode)
                 }
-                fs_watcher::Event::FolderAdded(folder)
-                | fs_watcher::Event::FolderCreated(folder) => {
-                    self.map.insert(folder, Action::Modify { is_folder: true });
+                Event::FileModified(path_buf, old_inode, new_inode) => {
+                    if old_inode == new_inode {
+                        self.append_modified(path_buf.as_path(), *old_inode);
+                    } else {
+                        self.append_modified_with_inode_change(
+                            path_buf.as_path(),
+                            *old_inode,
+                            *new_inode,
+                        );
+                    }
                 }
-                fs_watcher::Event::FolderRemoved(folder) => {
-                    self.map.insert(folder, Action::Remove { is_folder: true });
+                Event::FileRenamed { from, to, inode } => {
+                    self.append_renamed(from, to, *inode, false);
+                }
+                Event::FileReplaced { path, from, to } => {
+                    self.append_replaced(path.as_path(), *from, *to, false)
+                }
+                Event::FolderRemoved(path_buf, inode) => {
+                    self.append_removed_folder(path_buf.as_path(), *inode)
+                }
+                Event::FolderAdded(path_buf, inode) => {
+                    self.append_added_folder(path_buf.as_path(), *inode);
+                }
+                Event::FolderCreated(path_buf, inode) => {
+                    self.append_created_folder(path_buf.as_path(), *inode);
+                }
+                Event::FolderRenamed { from, to, inode } => {
+                    self.append_renamed(from.as_path(), to.as_path(), *inode, true);
+                }
+                Event::FolderReplaced { path, from, to } => {
+                    self.append_replaced(path.as_path(), *from, *to, true);
                 }
             }
         }
-        let mut out = Vec::new();
 
-        for (path, action) in self.map.iter() {
-            match action {
-                Action::Rename {
-                    to,
-                    is_folder: false,
-                } => match self.map.get(to) {
-                    Some(Action::Modify { is_folder: false }) => {
-                        out.push(SyncAction::MoveAndUpload {
-                            from: PathBuf::from(path),
-                            to: PathBuf::from(to),
+        fn append_removed_folder(&mut self, path: &'a Path, inode: u64) {
+            // go through the tracked children
+            let tracked_children: Vec<(&'a Path, Id, bool)> = self
+                .path_to_id
+                .iter()
+                .filter(|(p, _)| **p != path && p.parent() == Some(path))
+                .map(|(p, id)| {
+                    let is_folder = self
+                        .id_to_entry
+                        .get(id)
+                        .map(|e| e.is_folder)
+                        .expect("id must be present");
+
+                    (*p, *id, is_folder)
+                })
+                .collect();
+
+            for (_, id, is_folder) in tracked_children {
+                let entry = self.id_to_entry.get(&id).expect("id must be present");
+                if is_folder {
+                    self.append_removed_folder(entry.current_path, entry.current_inode);
+                } else {
+                    self.append_removed_file(entry.current_path, entry.current_inode);
+                }
+            }
+
+            let untracked_children: Vec<(&'a Path, u64, bool)> = self
+                .initial_state
+                .direct_children
+                .get(path)
+                .map(|dc| {
+                    dc.iter()
+                        .filter(|(p, i)| {
+                            !self.inode_to_id.contains_key(i)
+                                && !self.path_to_id.contains_key(p.as_path())
                         })
-                    }
-                    Some(Action::Remove { is_folder: false }) => {
-                        out.push(SyncAction::Delete(PathBuf::from(path)))
-                    }
-                    _ => out.push(SyncAction::Move {
-                        from: PathBuf::from(path),
-                        to: PathBuf::from(to),
-                    }),
-                },
-                Action::Rename {
-                    to,
-                    is_folder: true,
-                } => match self.map.get(to) {
-                    Some(Action::Remove { is_folder: true }) => {
-                        out.push(SyncAction::RemoveFolder(PathBuf::from(path)))
-                    }
-                    _ => out.push(SyncAction::MoveFolder {
-                        from: PathBuf::from(path),
-                        to: PathBuf::from(to),
-                    }),
-                },
-                Action::Modify { is_folder: false } => {
-                    // Skip modify if this path is a rename destination;
-                    // it is already covered by MoveAndUpsert.
-                    if !self.reverse_link.contains_key(*path) {
-                        out.push(SyncAction::Upload(PathBuf::from(path)));
-                    }
+                        .map(|(p, i)| (p.as_path(), *i, self.initial_state.is_folder(p.as_path())))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            for (child_path, child_inode, is_folder) in untracked_children {
+                if is_folder {
+                    self.append_removed_folder(child_path, child_inode);
+                } else {
+                    self.append_removed_file(child_path, child_inode);
                 }
-                Action::Modify { is_folder: true } => {
-                    out.push(SyncAction::EnsureFolder(PathBuf::from(path)));
+            }
+
+            let maybe_inode_id = self.inode_to_id.get(&inode);
+            let maybe_path_id = self.path_to_id.get(path);
+
+            match (maybe_path_id, maybe_inode_id) {
+                (None, None) => {
+                    let id = self.get_new_id();
+                    let entry = IdEntry {
+                        action: REMOVED,
+                        is_folder: true,
+                        initial_path: path,
+                        initial_inode: inode,
+                        current_path: path,
+                        current_inode: inode,
+                    };
+
+                    self.path_to_id.insert(path, id);
+                    self.inode_to_id.insert(inode, id);
+                    self.id_to_entry.insert(id, entry);
                 }
-                Action::Remove { is_folder } => {
-                    if !self.reverse_link.contains_key(*path) {
-                        if *is_folder {
-                            out.push(SyncAction::RemoveFolder(PathBuf::from(path)));
+                (Some(id), Some(inode_id)) if id == inode_id => {
+                    let entry = self.id_to_entry.get_mut(id).expect("id must be present");
+                    entry.action.merge(REMOVED);
+                }
+                _ => panic!("Impossible case"),
+            }
+        }
+
+        // path doesn't change, inode doesnt change
+        fn append_modified(&mut self, path: &'a Path, inode: u64) {
+            let maybe_path_id = self.path_to_id.get(path);
+            let maybe_inode_id = self.inode_to_id.get(&inode);
+
+            match (maybe_path_id, maybe_inode_id) {
+                (Some(id), Some(inode_id)) if id == inode_id => {
+                    let entry = self.id_to_entry.get_mut(id).expect("id must be present");
+                    entry.action.merge(MODIFIED);
+                }
+                (None, None) => {
+                    let id = self.get_new_id();
+                    let entry = IdEntry {
+                        action: MODIFIED,
+                        is_folder: false,
+                        initial_path: path,
+                        initial_inode: inode,
+                        current_path: path,
+                        current_inode: inode,
+                    };
+
+                    self.id_to_entry.insert(id, entry);
+                    self.path_to_id.insert(path, id);
+                    self.inode_to_id.insert(inode, id);
+                }
+                _ => panic!("Impossible case"),
+            }
+        }
+
+        // path doesn't change, inode changes
+        fn append_modified_with_inode_change(
+            &mut self,
+            path: &'a Path,
+            old_inode: u64,
+            new_inode: u64,
+        ) {
+            let maybe_path_id = self.path_to_id.get(path);
+            let maybe_inode_id = self.inode_to_id.remove(&old_inode);
+
+            match (maybe_path_id, maybe_inode_id) {
+                (Some(id), Some(inode_id)) if *id == inode_id => {
+                    self.inode_to_id.insert(new_inode, inode_id);
+                    let entry = self.id_to_entry.get_mut(id).expect("id must be present");
+                    entry.action.merge(MODIFIED);
+                    entry.current_inode = new_inode;
+                }
+                (None, None) => {
+                    let entry = IdEntry {
+                        action: MODIFIED,
+                        is_folder: false,
+                        initial_path: path,
+                        initial_inode: old_inode,
+                        current_path: path,
+                        current_inode: new_inode,
+                    };
+
+                    let id = self.get_new_id();
+                    self.path_to_id.insert(path, id);
+                    self.inode_to_id.insert(new_inode, id);
+                    self.id_to_entry.insert(id, entry);
+                }
+                _ => panic!("Impossible case"),
+            }
+        }
+
+        fn append_replaced(
+            &mut self,
+            path: &'a Path,
+            from_inode: u64,
+            to_inode: u64,
+            is_folder: bool,
+        ) {
+            let maybe_path_id = self.path_to_id.get(path);
+            let maybe_inode_id = self.inode_to_id.remove(&from_inode);
+
+            match (maybe_path_id, maybe_inode_id) {
+                (None, None) => {
+                    let entry = IdEntry {
+                        action: REPLACED,
+                        is_folder,
+                        initial_path: path,
+                        initial_inode: from_inode,
+                        current_path: path,
+                        current_inode: to_inode,
+                    };
+
+                    let id = self.get_new_id();
+                    self.id_to_entry.insert(id, entry);
+                    self.path_to_id.insert(path, id);
+                    self.inode_to_id.insert(to_inode, id);
+                }
+                (Some(path_id), Some(id)) if *path_id == id => {
+                    let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
+                    entry.action.merge(REPLACED);
+                    entry.current_inode = to_inode;
+                    self.inode_to_id.insert(to_inode, id);
+                }
+                _ => panic!("Impossible case"),
+            }
+        }
+
+        fn append_renamed_folder(&mut self, from_path: &'a Path, to_path: &'a Path, inode: u64) {
+            let maybe_path_id = self.path_to_id.remove(from_path);
+            let maybe_inode_id = self.inode_to_id.get(&inode).copied();
+
+            match (maybe_path_id, maybe_inode_id) {
+                (Some(id), Some(inode_id)) if inode_id == id => {
+                    let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
+                    if entry.initial_path == to_path {
+                        entry.action.remove_flag(RENAMED);
+
+                        if entry.action.has_any_flag() {
+                            entry.current_path = to_path;
+                            self.id_to_entry.insert(id, entry);
+                            self.path_to_id.insert(to_path, id);
                         } else {
-                            out.push(SyncAction::Delete(PathBuf::from(path)));
+                            self.inode_to_id.remove(&inode);
                         }
+                    } else {
+                        entry.current_path = to_path;
+                        entry.action.merge(RENAMED);
+                        self.id_to_entry.insert(id, entry);
+                        self.path_to_id.insert(to_path, id);
+                    }
+                }
+                (None, None) => {
+                    let entry = IdEntry {
+                        action: RENAMED,
+                        is_folder: true,
+                        initial_path: from_path,
+                        initial_inode: inode,
+                        current_path: to_path,
+                        current_inode: inode,
+                    };
+
+                    let id = self.get_new_id();
+                    self.path_to_id.insert(to_path, id);
+                    self.inode_to_id.insert(inode, id);
+                    self.id_to_entry.insert(id, entry);
+                }
+                _ => panic!("Impossible case"),
+            }
+        }
+
+        // inode stays the same, path changes
+        // if path is the same and there is only RENAMED flag, remove from the map
+        fn append_renamed(
+            &mut self,
+            from_path: &'a Path,
+            to_path: &'a Path,
+            inode: u64,
+            is_folder: bool,
+        ) {
+            let maybe_path_id = self.path_to_id.remove(from_path);
+            let maybe_inode_id = self.inode_to_id.get(&inode).copied();
+
+            match (maybe_path_id, maybe_inode_id) {
+                (Some(id), Some(inode_id)) if inode_id == id => {
+                    let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
+                    if entry.initial_path == to_path {
+                        entry.action.remove_flag(RENAMED);
+
+                        if entry.action.has_any_flag() {
+                            entry.current_path = to_path;
+                            self.id_to_entry.insert(id, entry);
+                            self.path_to_id.insert(to_path, id);
+                        } else {
+                            self.inode_to_id.remove(&inode);
+                        }
+                    } else {
+                        entry.current_path = to_path;
+                        entry.action.merge(RENAMED);
+                        self.id_to_entry.insert(id, entry);
+                        self.path_to_id.insert(to_path, id);
+                    }
+                }
+                (None, None) => {
+                    let entry = IdEntry {
+                        action: RENAMED,
+                        is_folder,
+                        initial_path: from_path,
+                        initial_inode: inode,
+                        current_path: to_path,
+                        current_inode: inode,
+                    };
+
+                    let id = self.get_new_id();
+                    self.path_to_id.insert(to_path, id);
+                    self.inode_to_id.insert(inode, id);
+                    self.id_to_entry.insert(id, entry);
+                }
+                _ => panic!("Impossible case"),
+            }
+        }
+
+        // it can be move from the folder and then added back with the same name
+        // it can be move from the folder and then added back with different name
+        // if there is a such a path in the
+        // if folder is replaced, all the files of the replaced folder come with Event::FileAdded
+        fn append_added_file(&mut self, path: &'a Path, inode: u64) {
+            let maybe_inode_id = self.inode_to_id.get(&inode);
+            let maybe_path_id = self.path_to_id.get(path);
+
+            match (maybe_path_id, maybe_inode_id) {
+                (None, None) => {
+                    let entry = IdEntry {
+                        action: ADDED,
+                        is_folder: false,
+                        initial_path: path,
+                        initial_inode: inode,
+                        current_path: path,
+                        current_inode: inode,
+                    };
+
+                    let id = self.get_new_id();
+                    self.path_to_id.insert(path, id);
+                    self.inode_to_id.insert(inode, id);
+                    self.id_to_entry.insert(id, entry);
+                }
+                (None, Some(id)) => {
+                    // different name same inode
+                    let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
+                    entry.action.remove_flag(REMOVED);
+                    entry.action.merge(MODIFIED); // file can be modified while it was outside of the watched folder
+                    entry.action.merge(RENAMED);
+
+                    self.path_to_id.remove(entry.current_path);
+                    self.path_to_id.insert(path, *id);
+                    entry.current_path = path;
+                }
+                (Some(id), None) => {
+                    // same path but different inode, treat it as the user modified the same file, but using tmp file
+                    let entry = self.id_to_entry.get_mut(id).expect("id must be present");
+                    self.inode_to_id.remove(&entry.current_inode);
+                    entry.current_inode = inode;
+                    entry.action.remove_flag(REMOVED);
+                    entry.action.merge(MODIFIED);
+                    self.inode_to_id.insert(entry.current_inode, *id);
+                }
+                (Some(id), Some(inode_id)) if id == inode_id => {
+                    // file returned back,
+                    let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
+                    entry.action.remove_flag(REMOVED);
+                    entry.action.merge(MODIFIED);
+                }
+                _ => panic!("Impossible case"),
+            }
+        }
+
+        fn append_added_folder(&mut self, path: &'a Path, inode: u64) {
+            let maybe_inode_id = self.inode_to_id.get(&inode);
+            let maybe_path_id = self.path_to_id.get(path);
+
+            match (maybe_path_id, maybe_inode_id) {
+                (None, None) => {
+                    let entry = IdEntry {
+                        action: ADDED,
+                        is_folder: true,
+                        initial_path: path,
+                        initial_inode: inode,
+                        current_path: path,
+                        current_inode: inode,
+                    };
+
+                    let id = self.get_new_id();
+                    self.path_to_id.insert(path, id);
+                    self.inode_to_id.insert(inode, id);
+                    self.id_to_entry.insert(id, entry);
+                }
+                (None, Some(id)) => {
+                    // Same inode, different path — folder moved
+                    let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
+                    entry.action.remove_flag(REMOVED);
+                    entry.action.merge(RENAMED);
+
+                    self.path_to_id.remove(entry.current_path);
+                    self.path_to_id.insert(path, *id);
+                    entry.current_path = path;
+                }
+                (Some(id), None) => {
+                    // Same path, different inode — folder replaced
+                    let entry = self.id_to_entry.get_mut(id).expect("id must be present");
+                    self.inode_to_id.remove(&entry.current_inode);
+                    entry.current_inode = inode;
+                    entry.action.remove_flag(REMOVED);
+                    entry.action.merge(ADDED);
+                    self.inode_to_id.insert(inode, *id);
+                }
+                (Some(id), Some(inode_id)) if id == inode_id => {
+                    // Same path, same inode — folder returned back
+                    let mut entry = self.id_to_entry.remove(id).expect("id must be present");
+                    entry.action.remove_flag(REMOVED);
+
+                    if entry.action.has_any_flag() {
+                        self.id_to_entry.insert(*id, entry);
+                    } else {
+                        // No flags left — folder came back unchanged, remove tracking
+                        self.path_to_id.remove(path);
+                        self.inode_to_id.remove(&inode);
+                    }
+                }
+                _ => panic!("Impossible case"),
+            }
+        }
+
+        fn append_removed_file(&mut self, path: &'a Path, inode: u64) {
+            let maybe_inode_id = self.inode_to_id.remove(&inode);
+            let maybe_path_id = self.path_to_id.remove(path);
+
+            match (maybe_inode_id, maybe_path_id) {
+                (None, None) => {
+                    let entry = IdEntry {
+                        action: REMOVED,
+                        is_folder: false,
+                        initial_path: path,
+                        initial_inode: inode,
+                        current_path: path,
+                        current_inode: inode,
+                    };
+
+                    let id = self.get_new_id();
+                    self.path_to_id.insert(path, id);
+                    self.inode_to_id.insert(inode, id);
+                    self.id_to_entry.insert(id, entry);
+                }
+                (Some(id), Some(path_id)) if id == path_id => {
+                    let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
+                    if entry.action.is_added() || entry.action.is_created() {
+                        // do nothing and it will be removed
+                    } else {
+                        entry.action.merge(REMOVED);
+                        self.path_to_id.insert(path, id);
+                        self.inode_to_id.insert(inode, id);
+                        self.id_to_entry.insert(id, entry);
+                    }
+                }
+                _ => panic!("Impossible case"),
+            }
+        }
+
+        fn append_created_file(&mut self, path: &'a Path, inode: u64) {
+            let maybe_inode_id = self.inode_to_id.get(&inode);
+            let maybe_path_id = self.path_to_id.get(path);
+
+            match (maybe_path_id, maybe_inode_id) {
+                (None, None) => {
+                    let entry = IdEntry {
+                        action: CREATED,
+                        is_folder: false,
+                        initial_path: path,
+                        initial_inode: inode,
+                        current_path: path,
+                        current_inode: inode,
+                    };
+                    let id = self.get_new_id();
+
+                    self.id_to_entry.insert(id, entry);
+                    self.path_to_id.insert(path, id);
+                    self.inode_to_id.insert(inode, id);
+                }
+                _ => panic!("Impossible case"),
+            }
+        }
+
+        fn append_created_folder(&mut self, path: &'a Path, inode: u64) {
+            let maybe_inode_id = self.inode_to_id.get(&inode);
+            let maybe_path_id = self.path_to_id.get(path);
+
+            match (maybe_path_id, maybe_inode_id) {
+                (None, None) => {
+                    let entry = IdEntry {
+                        action: CREATED,
+                        is_folder: true,
+                        initial_path: path,
+                        initial_inode: inode,
+                        current_path: path,
+                        current_inode: inode,
+                    };
+                    let id = self.get_new_id();
+
+                    self.id_to_entry.insert(id, entry);
+                    self.path_to_id.insert(path, id);
+                    self.inode_to_id.insert(inode, id);
+                }
+                _ => panic!("Impossible case"),
+            }
+        }
+
+        fn to_sync_actions(self) -> Vec<SyncAction> {
+            let mut actions = vec![];
+            for entry in self.id_to_entry.into_values() {
+                if entry.is_folder {
+                    // folder specific behavior
+                    if entry.action.has_flag(REMOVED) {
+                        actions.push(SyncAction::RemoveFolder(entry.initial_path.to_path_buf()));
+                        continue;
+                    }
+
+                    if entry.action.has_flag(ADDED) {
+                        actions.push(SyncAction::EnsureFolder(entry.current_path.to_path_buf()));
+                        continue;
+                    }
+                } else {
+                    if entry.action.has_flag(REMOVED) {
+                        actions.push(SyncAction::Delete(entry.initial_path.to_path_buf()));
+                        continue;
+                    }
+
+                    if entry.action.has_flag(ADDED) {
+                        actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
+                        continue;
+                    }
+
+                    if entry.action.has_flag(CREATED) {
+                        actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
+                        continue;
+                    }
+
+                    if entry.action.has_flag(MODIFIED) && entry.action.has_flag(RENAMED) {
+                        actions.push(SyncAction::MoveAndUpload {
+                            from: entry.initial_path.to_path_buf(),
+                            to: entry.current_path.to_path_buf(),
+                        });
+                        continue;
+                    }
+
+                    if entry.action.has_flag(REPLACED) && entry.action.has_flag(RENAMED) {
+                        actions.push(SyncAction::MoveAndUpload {
+                            from: entry.initial_path.to_path_buf(),
+                            to: entry.current_path.to_path_buf(),
+                        });
+                        continue;
+                    }
+
+                    if entry.action.has_flag(REPLACED) {
+                        actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
+                        continue;
+                    }
+
+                    if entry.action.has_flag(RENAMED) {
+                        actions.push(SyncAction::Move {
+                            from: entry.initial_path.to_path_buf(),
+                            to: entry.current_path.to_path_buf(),
+                        });
+                        continue;
+                    }
+
+                    if entry.action.has_flag(MODIFIED) {
+                        actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
+                        continue;
                     }
                 }
             }
-        }
 
-        out
-    }
-
-    fn rename(&mut self, from: &'a String, to: &'a String, is_folder: bool) {
-        let from_entry = self.map.get(from);
-        let link_to_from_option = self.reverse_link.get(from).copied();
-
-        match (from_entry, link_to_from_option) {
-            (None, None) => {
-                self.map.insert(from, Action::Rename { to, is_folder });
-                self.reverse_link.insert(to, from);
-            }
-            (None, Some(reverse_link)) if reverse_link == to => {
-                // cycle, remove
-                self.map.remove(to);
-                self.reverse_link.remove(from);
-            }
-            // collapse path
-            (None, Some(link_to_from)) => {
-                if let Some(Action::Rename {
-                    to: forward_link, ..
-                }) = self.map.get_mut(link_to_from)
-                {
-                    self.reverse_link.remove(from);
-                    *forward_link = to;
-                    self.reverse_link.insert(to, link_to_from);
-                }
-            }
-            (Some(action), Some(link_to_from)) => {
-                let action = action.clone();
-                self.map.insert(to, action);
-                self.map.remove(from);
-                self.reverse_link.remove(from);
-
-                if let Some(Action::Rename {
-                    to: forward_link, ..
-                }) = self.map.get_mut(link_to_from)
-                {
-                    *forward_link = to;
-                    self.reverse_link.insert(to, link_to_from);
-                }
-            }
-            _ => {
-                println!("Unhandled case");
-            }
+            actions
         }
     }
-}
+
+    type Id = u32;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -184,74 +706,718 @@ impl<'a> EventsHandler<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{
+        collections::{BTreeMap, HashMap, HashSet},
+        env::temp_dir,
+        fmt::Debug,
+        path::{Path, PathBuf},
+        sync::OnceLock,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use fs_watcher::Event;
     use rstest::rstest;
 
-    use super::EventsHandler;
-    use crate::app::message::SyncAction;
+    use crate::app::{coalesce::EventsTransaction, fs_index::FsIndex, message::SyncAction};
 
-    #[derive(Clone, Copy, Debug)]
-    enum ExpectedAction {
-        Upload(&'static str),
-        Delete(&'static str),
-        Move(&'static str, &'static str),
-        MoveAndUpload(&'static str, &'static str),
+    fn path_buf(path: &str) -> PathBuf {
+        PathBuf::from(path)
     }
 
-    fn expected_actions(expected: Vec<ExpectedAction>) -> Vec<SyncAction> {
-        expected
+    fn run_matrix_case(events: Vec<Event>, expected: Vec<SyncAction>) {
+        let mut path_to_inode = HashMap::<PathBuf, u64>::new();
+        path_to_inode.insert(PathBuf::from("a.txt"), 1);
+        path_to_inode.insert(PathBuf::from("b.txt"), 2);
+        path_to_inode.insert(PathBuf::from("f"), 3);
+        path_to_inode.insert(PathBuf::from("f/b.txt"), 4);
+
+        let mut direct_children = HashMap::<PathBuf, Vec<(PathBuf, u64)>>::new();
+        direct_children.insert(
+            path_buf("/"),
+            vec![
+                (path_buf("a.txt"), 1),
+                (path_buf("b.txt"), 2),
+                (path_buf("f"), 3),
+            ],
+        );
+        direct_children.insert(path_buf("f"), vec![(path_buf("f/b.txt"), 4)]);
+
+        let inode_to_path: HashMap<u64, PathBuf> = path_to_inode
+            .clone()
             .into_iter()
-            .map(|action| match action {
-                ExpectedAction::Upload(path) => SyncAction::Upload(PathBuf::from(path)),
-                ExpectedAction::Delete(path) => SyncAction::Delete(PathBuf::from(path)),
-                ExpectedAction::Move(from, to) => SyncAction::Move {
-                    from: PathBuf::from(from),
-                    to: PathBuf::from(to),
-                },
-                ExpectedAction::MoveAndUpload(from, to) => SyncAction::MoveAndUpload {
-                    from: PathBuf::from(from),
-                    to: PathBuf::from(to),
-                },
-            })
-            .collect()
-    }
+            .map(|(k, v)| (v, k))
+            .collect();
 
-    fn action_key(action: &SyncAction) -> (String, String) {
-        match action {
-            SyncAction::Upload(path) => ("upload".to_string(), path.display().to_string()),
-            SyncAction::Delete(path) => ("delete".to_string(), path.display().to_string()),
-            SyncAction::MoveAndUpload { from, to } => (
-                "move_and_upload".to_string(),
-                format!("{}->{}", from.display(), to.display()),
-            ),
-            SyncAction::MoveFolder { from, to } |
-            SyncAction::Move { from, to } => (
-                "move".to_string(),
-                format!("{}->{}", from.display(), to.display()),
-            ),
-            SyncAction::EnsureFolder(path) => {
-                ("ensure_folder".to_string(), path.display().to_string())
-            }
-            SyncAction::RemoveFolder(path) => {
-                ("remove_folder".to_string(), path.display().to_string())
-            }
+        let mut fs_index = FsIndex {
+            path_to_inode,
+            inode_to_path,
+            direct_children,
+        };
+
+        let mut events_processer = EventsTransaction::new(&mut fs_index);
+        for e in events.iter() {
+            events_processer.append_event(e);
+            println!("");
+            println!("{:?}", events_processer.id_to_entry);
         }
+
+        let result = events_processer.to_sync_actions();
+        assert_eq!(result, expected);
     }
 
-    fn assert_actions_eq_unordered(mut actual: Vec<SyncAction>, mut expected: Vec<SyncAction>) {
-        actual.sort_by_key(action_key);
-        expected.sort_by_key(action_key);
-        let actual_keys: Vec<(String, String)> = actual.iter().map(action_key).collect();
-        let expected_keys: Vec<(String, String)> = expected.iter().map(action_key).collect();
-        assert_eq!(actual_keys, expected_keys);
+
+
+    #[rstest]
+    #[case::renamed_then_removed(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileRemoved( "c.txt".into(), 1),
+        ],
+        vec![SyncAction::Delete(path_buf("a.txt"))])
+    ]
+    #[case::renamed_then_removed_then_added(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileRemoved( "c.txt".into(), 1),
+            Event::FileAdded("c.txt".into(), 1)
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("c.txt") }]
+    )]
+    #[case::renamed_then_removed_then_added_with_different_inode(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileRemoved( "c.txt".into(), 1),
+            Event::FileAdded("c.txt".into(), 10)
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("c.txt") }]
+    )]
+    #[case::replaced_then_removed(
+        vec![
+            Event::FileReplaced {
+                path: "a.txt".into(),
+                from: 1,
+                to: 3,
+            },
+            Event::FileRemoved( "a.txt".into(), 3),
+        ],
+        vec![SyncAction::Delete(path_buf("a.txt")) ]
+    )]
+    #[case::replaced_then_renamed_then_removed(
+        vec![
+            Event::FileReplaced {
+                path: "a.txt".into(),
+                from: 1,
+                to: 3,
+            },
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 3,
+            },
+            Event::FileRemoved( "c.txt".into(), 3),
+        ],
+        vec![SyncAction::Delete(path_buf("a.txt")) ]
+    )]
+    fn matrix_multiple_events_and_at_least_one_remove_event(
+        #[case] events: Vec<Event>,
+        #[case] expected: Vec<SyncAction>,
+    ) {
+        run_matrix_case(events, expected);
     }
 
-    fn run_matrix_case(events: Vec<Event>, expected: Vec<ExpectedAction>) {
-        let actions = EventsHandler::new().process(&events);
+    #[rstest]
+    #[case::renamed_then_added_with_old_name_of_renamed_file(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileAdded("a.txt".into(), 10)
+        ],
+        vec![SyncAction::Move { from: path_buf("a.txt"), to: path_buf("c.txt") }, SyncAction::Upload(path_buf("a.txt"))]
+    )]
+    #[case::renamed_then_added_with_old_name_the_renamed_new_file(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileAdded("a.txt".into(), 10),
+            Event::FileRenamed { from: "a.txt".into(), to: "b.txt".into(), inode: 10 }
+        ],
+        vec![SyncAction::Move { from: path_buf("a.txt"), to: path_buf("c.txt") }, SyncAction::Upload(path_buf("b.txt"))]
+    )]
+    #[case::replaced_and_rename_file(
+        vec![
+            Event::FileReplaced {
+                path: "a.txt".into(),
+                from:1,
+                to: 10,
+            },
+            Event::FileRenamed { from: "a.txt".into(), to: "b.txt".into(), inode: 10 }
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("b.txt") }]
+    )]
+    #[case::replaced_file(
+        vec![
+            Event::FileReplaced {
+                path: "a.txt".into(),
+                from: 1,
+                to: 10,
+            },
+        ],
+        vec![SyncAction::Upload(path_buf("a.txt"))]
+    )]
+    fn matrix_multiple_events_without_remove_event(
+        #[case] events: Vec<Event>,
+        #[case] expected: Vec<SyncAction>,
+    ) {
+        run_matrix_case(events, expected);
+    }
 
-        assert_actions_eq_unordered(actions, expected_actions(expected));
+    // -----------------------------------------------------------------------
+    // Complex multi-event scenarios
+    // -----------------------------------------------------------------------
+
+    #[rstest]
+    #[case::modified_then_renamed_then_modified(
+        vec![
+            Event::FileModified("a.txt".into(), 1, 1),
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileModified("c.txt".into(), 1, 1),
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("c.txt") }]
+    )]
+    #[case::renamed_then_modified_then_renamed_again(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileModified("c.txt".into(), 1, 1),
+            Event::FileRenamed {
+                from: "c.txt".into(),
+                to: "d.txt".into(),
+                inode: 1,
+            },
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("d.txt") }]
+    )]
+    #[case::replaced_then_modified(
+        vec![
+            Event::FileReplaced {
+                path: "a.txt".into(),
+                from: 1,
+                to: 10,
+            },
+            Event::FileModified("a.txt".into(), 10, 10),
+        ],
+        vec![SyncAction::Upload(path_buf("a.txt"))]
+    )]
+    #[case::replaced_then_renamed_then_modified(
+        vec![
+            Event::FileReplaced {
+                path: "a.txt".into(),
+                from: 1,
+                to: 10,
+            },
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 10,
+            },
+            Event::FileModified("c.txt".into(), 10, 10),
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("c.txt") }]
+    )]
+    #[case::rename_chain_three_hops(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileRenamed {
+                from: "c.txt".into(),
+                to: "d.txt".into(),
+                inode: 1,
+            },
+            Event::FileRenamed {
+                from: "d.txt".into(),
+                to: "e.txt".into(),
+                inode: 1,
+            },
+        ],
+        vec![SyncAction::Move { from: path_buf("a.txt"), to: path_buf("e.txt") }]
+    )]
+    #[case::rename_swap_back_is_noop(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileRenamed {
+                from: "c.txt".into(),
+                to: "a.txt".into(),
+                inode: 1,
+            },
+        ],
+        vec![]
+    )]
+    #[case::rename_swap_back_with_modification_in_between(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileModified("c.txt".into(), 1, 1),
+            Event::FileRenamed {
+                from: "c.txt".into(),
+                to: "a.txt".into(),
+                inode: 1,
+            },
+        ],
+        vec![SyncAction::Upload(path_buf("a.txt"))]
+    )]
+    #[case::modified_with_inode_change_then_renamed(
+        vec![
+            Event::FileModified("a.txt".into(), 1, 10),
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 10,
+            },
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("c.txt") }]
+    )]
+    #[case::modified_with_inode_change_then_removed(
+        vec![
+            Event::FileModified("a.txt".into(), 1, 10),
+            Event::FileRemoved("a.txt".into(), 10),
+        ],
+        vec![SyncAction::Delete(path_buf("a.txt"))]
+    )]
+    #[case::added_then_renamed_then_modified(
+        vec![
+            Event::FileAdded("c.txt".into(), 20),
+            Event::FileRenamed {
+                from: "c.txt".into(),
+                to: "d.txt".into(),
+                inode: 20,
+            },
+            Event::FileModified("d.txt".into(), 20, 20),
+        ],
+        vec![SyncAction::Upload(path_buf("d.txt"))]
+    )]
+    #[case::added_then_removed_is_no_op(
+        vec![
+            Event::FileAdded("c.txt".into(), 20),
+            Event::FileRemoved("c.txt".into(), 20),
+        ],
+        vec![]
+    )]
+    #[case::removed_then_added_same_inode(
+        vec![
+            Event::FileRemoved("a.txt".into(), 1),
+            Event::FileAdded("a.txt".into(), 1),
+        ],
+        vec![SyncAction::Upload(path_buf("a.txt"))]
+    )]
+    #[case::removed_then_added_different_inode_same_path(
+        vec![
+            Event::FileRemoved("a.txt".into(), 1),
+            Event::FileAdded("a.txt".into(), 20),
+        ],
+        vec![SyncAction::Upload(path_buf("a.txt"))]
+    )]
+    #[case::removed_then_added_different_path_same_inode(
+        vec![
+            Event::FileRemoved("a.txt".into(), 1),
+            Event::FileAdded("c.txt".into(), 1),
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("c.txt") }]
+    )]
+    #[case::two_independent_renames(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileRenamed {
+                from: "b.txt".into(),
+                to: "d.txt".into(),
+                inode: 2,
+            },
+        ],
+        vec![
+            SyncAction::Move { from: path_buf("a.txt"), to: path_buf("c.txt") },
+            SyncAction::Move { from: path_buf("b.txt"), to: path_buf("d.txt") },
+        ]
+    )]
+    #[case::two_independent_modifications(
+        vec![
+            Event::FileModified("a.txt".into(), 1, 1),
+            Event::FileModified("b.txt".into(), 2, 2),
+        ],
+        vec![
+            SyncAction::Upload(path_buf("a.txt")),
+            SyncAction::Upload(path_buf("b.txt")),
+        ]
+    )]
+    #[case::rename_one_modify_other(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileModified("b.txt".into(), 2, 2),
+        ],
+        vec![
+            SyncAction::Move { from: path_buf("a.txt"), to: path_buf("c.txt") },
+            SyncAction::Upload(path_buf("b.txt")),
+        ]
+    )]
+    #[case::renamed_then_replaced_at_new_path(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileReplaced {
+                path: "c.txt".into(),
+                from: 1,
+                to: 30,
+            },
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("c.txt") }]
+    )]
+    #[case::multiple_modifications_with_inode_changes(
+        vec![
+            Event::FileModified("a.txt".into(), 1, 10),
+            Event::FileModified("a.txt".into(), 10, 20),
+        ],
+        vec![SyncAction::Upload(path_buf("a.txt"))]
+    )]
+    #[case::renamed_added_at_old_path_then_both_modified(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileAdded("a.txt".into(), 10),
+            Event::FileModified("c.txt".into(), 1, 1),
+            Event::FileModified("a.txt".into(), 10, 10),
+        ],
+        vec![
+            SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("c.txt") },
+            SyncAction::Upload(path_buf("a.txt")),
+        ]
+    )]
+    #[case::replaced_then_replaced_again(
+        vec![
+            Event::FileReplaced {
+                path: "a.txt".into(),
+                from: 1,
+                to: 10,
+            },
+            Event::FileReplaced {
+                path: "a.txt".into(),
+                from: 10,
+                to: 20,
+            },
+        ],
+        vec![SyncAction::Upload(path_buf("a.txt"))]
+    )]
+    #[case::replaced_twice_then_renamed(
+        vec![
+            Event::FileReplaced {
+                path: "a.txt".into(),
+                from: 1,
+                to: 10,
+            },
+            Event::FileReplaced {
+                path: "a.txt".into(),
+                from: 10,
+                to: 20,
+            },
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 20,
+            },
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("c.txt") }]
+    )]
+    #[case::renamed_then_removed_then_added_with_different_path_and_inode(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileRemoved("c.txt".into(), 1),
+            Event::FileAdded("d.txt".into(), 1),
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("d.txt") }]
+    )]
+    #[case::modified_then_renamed_then_removed_then_added_same_path(
+        vec![
+            Event::FileModified("a.txt".into(), 1, 1),
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileRemoved("c.txt".into(), 1),
+            Event::FileAdded("c.txt".into(), 1),
+        ],
+        vec![SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("c.txt") }]
+    )]
+    #[rstest]
+    #[case::created_then_modified(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileModified("c.txt".into(), 20, 20),
+        ],
+        vec![SyncAction::Upload(path_buf("c.txt"))]
+    )]
+    #[case::created_then_modified_with_inode_change(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileModified("c.txt".into(), 20, 30),
+        ],
+        vec![SyncAction::Upload(path_buf("c.txt"))]
+    )]
+    #[case::created_then_renamed(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileRenamed {
+                from: "c.txt".into(),
+                to: "d.txt".into(),
+                inode: 20,
+            },
+        ],
+        vec![SyncAction::Upload(path_buf("d.txt"))]
+    )]
+    #[case::created_then_renamed_then_modified(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileRenamed {
+                from: "c.txt".into(),
+                to: "d.txt".into(),
+                inode: 20,
+            },
+            Event::FileModified("d.txt".into(), 20, 20),
+        ],
+        vec![SyncAction::Upload(path_buf("d.txt"))]
+    )]
+    #[case::created_then_removed_is_no_op(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileRemoved("c.txt".into(), 20),
+        ],
+        vec![]
+    )]
+    #[case::created_then_modified_then_removed_is_no_op(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileModified("c.txt".into(), 20, 20),
+            Event::FileRemoved("c.txt".into(), 20),
+        ],
+        vec![]
+    )]
+    #[case::created_then_renamed_then_removed_is_no_op(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileRenamed {
+                from: "c.txt".into(),
+                to: "d.txt".into(),
+                inode: 20,
+            },
+            Event::FileRemoved("d.txt".into(), 20),
+        ],
+        vec![]
+    )]
+    #[case::created_then_replaced(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileReplaced {
+                path: "c.txt".into(),
+                from: 20,
+                to: 30,
+            },
+        ],
+        vec![SyncAction::Upload(path_buf("c.txt"))]
+    )]
+    #[case::created_then_replaced_then_renamed(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileReplaced {
+                path: "c.txt".into(),
+                from: 20,
+                to: 30,
+            },
+            Event::FileRenamed {
+                from: "c.txt".into(),
+                to: "d.txt".into(),
+                inode: 30,
+            },
+        ],
+        vec![SyncAction::Upload(path_buf("d.txt"))]
+    )]
+    #[case::created_then_rename_chain(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileRenamed {
+                from: "c.txt".into(),
+                to: "d.txt".into(),
+                inode: 20,
+            },
+            Event::FileRenamed {
+                from: "d.txt".into(),
+                to: "e.txt".into(),
+                inode: 20,
+            },
+            Event::FileRenamed {
+                from: "e.txt".into(),
+                to: "f.txt".into(),
+                inode: 20,
+            },
+        ],
+        vec![SyncAction::Upload(path_buf("f.txt"))]
+    )]
+    #[case::created_then_modified_multiple_times(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileModified("c.txt".into(), 20, 20),
+            Event::FileModified("c.txt".into(), 20, 20),
+            Event::FileModified("c.txt".into(), 20, 20),
+        ],
+        vec![SyncAction::Upload(path_buf("c.txt"))]
+    )]
+    #[case::created_then_removed_then_added_back(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileRemoved("c.txt".into(), 20),
+            Event::FileAdded("c.txt".into(), 20),
+        ],
+        vec![SyncAction::Upload(path_buf("c.txt"))]
+    )]
+    #[case::created_then_removed_then_added_different_inode(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileRemoved("c.txt".into(), 20),
+            Event::FileAdded("c.txt".into(), 30),
+        ],
+        vec![SyncAction::Upload(path_buf("c.txt"))]
+    )]
+    #[case::existing_modified_and_new_created(
+        vec![
+            Event::FileModified("a.txt".into(), 1, 1),
+            Event::FileCreated("c.txt".into(), 20),
+        ],
+        vec![
+            SyncAction::Upload(path_buf("a.txt")),
+            SyncAction::Upload(path_buf("c.txt")),
+        ]
+    )]
+    #[case::existing_renamed_and_new_created_at_old_path(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileCreated("a.txt".into(), 20),
+        ],
+        vec![
+            SyncAction::Move { from: path_buf("a.txt"), to: path_buf("c.txt") },
+            SyncAction::Upload(path_buf("a.txt")),
+        ]
+    )]
+    #[case::existing_removed_and_new_created(
+        vec![
+            Event::FileRemoved("a.txt".into(), 1),
+            Event::FileCreated("c.txt".into(), 20),
+        ],
+        vec![
+            SyncAction::Delete(path_buf("a.txt")),
+            SyncAction::Upload(path_buf("c.txt")),
+        ]
+    )]
+    #[case::two_files_created(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileCreated("d.txt".into(), 30),
+        ],
+        vec![
+            SyncAction::Upload(path_buf("c.txt")),
+            SyncAction::Upload(path_buf("d.txt")),
+        ]
+    )]
+    #[case::created_then_renamed_then_modified_then_replaced(
+        vec![
+            Event::FileCreated("c.txt".into(), 20),
+            Event::FileRenamed {
+                from: "c.txt".into(),
+                to: "d.txt".into(),
+                inode: 20,
+            },
+            Event::FileModified("d.txt".into(), 20, 20),
+            Event::FileReplaced {
+                path: "d.txt".into(),
+                from: 20,
+                to: 40,
+            },
+        ],
+        vec![SyncAction::Upload(path_buf("d.txt"))]
+    )]
+    #[case::existing_renamed_and_new_created_then_both_modified(
+        vec![
+            Event::FileRenamed {
+                from: "a.txt".into(),
+                to: "c.txt".into(),
+                inode: 1,
+            },
+            Event::FileCreated("d.txt".into(), 20),
+            Event::FileModified("c.txt".into(), 1, 1),
+            Event::FileModified("d.txt".into(), 20, 20),
+        ],
+        vec![
+            SyncAction::MoveAndUpload { from: path_buf("a.txt"), to: path_buf("c.txt") },
+            SyncAction::Upload(path_buf("d.txt")),
+        ]
+    )]
+    fn matrix_complex_multi_event_cases(
+        #[case] events: Vec<Event>,
+        #[case] expected: Vec<SyncAction>,
+    ) {
+        run_matrix_case(events, expected);
     }
 
     // -----------------------------------------------------------------------
@@ -259,146 +1425,178 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[rstest]
-    #[case::file_created(
-        vec![Event::FileCreated("a.txt".into())],
-        vec![ExpectedAction::Upload("a.txt")]
+    #[case::single_modified_same_inode(
+        vec![Event::FileModified("a.txt".into(), 1, 1)],
+        vec![SyncAction::Upload(path_buf("a.txt"))]
     )]
-    #[case::file_added(
-        vec![Event::FileAdded("a.txt".into())],
-        vec![ExpectedAction::Upload("a.txt")]
+    #[case::single_modified_different_inode(
+        vec![Event::FileModified("a.txt".into(), 1, 10)],
+        vec![SyncAction::Upload(path_buf("a.txt"))]
     )]
-    #[case::file_modified(
-        vec![Event::FileModified("a.txt".into())],
-        vec![ExpectedAction::Upload("a.txt")]
-    )]
-    #[case::file_removed(
-        vec![Event::FileRemoved("a.txt".into())],
-        vec![ExpectedAction::Delete("a.txt")]
-    )]
-    #[case::rename_file(
-        vec![Event::FileRenamed{
-            from: "old.txt".into(),
-            to: "new.txt".into(),
+    #[case::single_renamed(
+        vec![Event::FileRenamed {
+            from: "a.txt".into(),
+            to: "c.txt".into(),
+            inode: 1,
         }],
-        vec![ExpectedAction::Move("old.txt", "new.txt")]
+        vec![SyncAction::Move { from: path_buf("a.txt"), to: path_buf("c.txt") }]
     )]
-    fn matrix_single_event_cases(
-        #[case] events: Vec<Event>,
-        #[case] expected: Vec<ExpectedAction>,
-    ) {
+    #[case::single_removed(
+        vec![Event::FileRemoved("a.txt".into(), 1)],
+        vec![SyncAction::Delete(path_buf("a.txt"))]
+    )]
+    #[case::single_added(
+        vec![Event::FileAdded("c.txt".into(), 20)],
+        vec![SyncAction::Upload(path_buf("c.txt"))]
+    )]
+    #[case::single_replaced(
+        vec![Event::FileReplaced {
+            path: "a.txt".into(),
+            from: 1,
+            to: 10,
+        }],
+        vec![SyncAction::Upload(path_buf("a.txt"))]
+    )]
+    #[rstest]
+    #[case::single_created(
+        vec![Event::FileCreated("c.txt".into(), 20)],
+        vec![SyncAction::Upload(path_buf("c.txt"))]
+    )]
+    fn matrix_single_event(#[case] events: Vec<Event>, #[case] expected: Vec<SyncAction>) {
         run_matrix_case(events, expected);
     }
 
     // -----------------------------------------------------------------------
-    // B) Same-path file bursts
+    // Folder Removed test cases
     // -----------------------------------------------------------------------
 
     #[rstest]
-    #[case::created_then_modified(
-        vec![Event::FileCreated("a.txt".into()), Event::FileModified("a.txt".into()), Event::FileModified("a.txt".into())],
-        vec![ExpectedAction::Upload("a.txt")]
-    )]
-    #[case::added_then_modified(
-        vec![Event::FileAdded("a.txt".into()), Event::FileModified("a.txt".into())],
-        vec![ExpectedAction::Upload("a.txt")]
-    )]
-    #[case::modified_burst(
-        vec![Event::FileModified("a.txt".into()), Event::FileModified("a.txt".into())],
-        vec![ExpectedAction::Upload("a.txt")]
-    )]
-    #[case::modified_then_removed(
-        vec![Event::FileModified("a.txt".into()), Event::FileRemoved("a.txt".into())],
-        vec![ExpectedAction::Delete("a.txt")]
-    )]
-    #[case::removed_then_created(
-        vec![Event::FileRemoved("a.txt".into()), Event::FileCreated("a.txt".into())],
-        vec![ExpectedAction::Upload("a.txt")]
-    )]
-    #[case::removed_then_added(
-        vec![Event::FileRemoved("a.txt".into()), Event::FileAdded("a.txt".into())],
-        vec![ExpectedAction::Upload("a.txt")]
-    )]
-    #[case::removed_created_modified(
+    #[case::folder_removed_with_one_file(
+        vec![Event::FolderRemoved("f".into(), 3)],
         vec![
-            Event::FileRemoved("a.txt".into()),
-            Event::FileCreated("a.txt".into()),
-            Event::FileModified("a.txt".into()),
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
+    )]
+    #[case::file_in_folder_modified_then_folder_removed(
+        vec![
+            Event::FileModified("f/b.txt".into(), 4, 4),
+            Event::FolderRemoved("f".into(), 3),
         ],
-        vec![ExpectedAction::Upload("a.txt")]
+        vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
     )]
-    fn matrix_file_burst_cases(#[case] events: Vec<Event>, #[case] expected: Vec<ExpectedAction>) {
-        run_matrix_case(events, expected);
-    }
-
-    // -----------------------------------------------------------------------
-    // D) Rename-centric bursts
-    // -----------------------------------------------------------------------
-
-    #[rstest]
-    #[case::rename_then_modify(
+    #[case::file_in_folder_renamed_out_then_folder_removed(
         vec![
             Event::FileRenamed {
-                from: "a.txt".into(),
-                to: "b.txt".into(),
-            },
-            Event::FileModified("b.txt".into()),
-        ],
-        vec![ExpectedAction::MoveAndUpload("a.txt", "b.txt")]
-    )]
-    #[case::rename_then_removed_destination(
-        vec![
-            Event::FileRenamed {
-                from: "a.txt".into(),
-                to: "b.txt".into(),
-            },
-            Event::FileRemoved("b.txt".into()),
-        ],
-        vec![ExpectedAction::Delete("a.txt")]
-    )]
-    #[case::rename_chain(
-        vec![
-            Event::FileRenamed {
-                from: "a.txt".into(),
-                to: "b.txt".into(),
-            },
-            Event::FileRenamed {
-                from: "b.txt".into(),
+                from: "f/b.txt".into(),
                 to: "c.txt".into(),
+                inode: 4,
             },
+            Event::FolderRemoved("f".into(), 3),
         ],
-        vec![ExpectedAction::Move("a.txt", "c.txt")]
+        vec![
+            SyncAction::Move {
+                from: path_buf("f/b.txt"),
+                to: path_buf("c.txt"),
+            },
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
     )]
-    #[case::rename_chain_then_modify_terminal(
+    #[case::file_in_folder_renamed_within_then_folder_removed(
         vec![
             Event::FileRenamed {
-                from: "a.txt".into(),
-                to: "b.txt".into(),
+                from: "f/b.txt".into(),
+                to: "f/c.txt".into(),
+                inode: 4,
             },
-            Event::FileRenamed {
-                from: "b.txt".into(),
-                to: "c.txt".into(),
-            },
-            Event::FileModified("c.txt".into()),
+            Event::FolderRemoved("f".into(), 3),
         ],
-        vec![ExpectedAction::MoveAndUpload("a.txt", "c.txt")]
-    )]
-    #[case::rename_swap_back(
         vec![
-            Event::FileRenamed {
-                from: "a.txt".into(),
-                to: "b.txt".into(),
-            },
-            Event::FileRenamed {
-                from: "b.txt".into(),
-                to: "a.txt".into(),
-            },
-        ],
-        vec![]
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
     )]
-    fn matrix_rename_burst_cases(
-        #[case] events: Vec<Event>,
-        #[case] expected: Vec<ExpectedAction>,
-    ) {
+    #[case::file_created_in_folder_then_folder_removed(
+        vec![
+            Event::FileCreated("f/new.txt".into(), 20),
+            Event::FolderRemoved("f".into(), 3),
+        ],
+        vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
+    )]
+    #[case::file_added_in_folder_then_folder_removed(
+        vec![
+            Event::FileAdded("f/new.txt".into(), 20),
+            Event::FolderRemoved("f".into(), 3),
+        ],
+        vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
+    )]
+    #[case::file_in_folder_replaced_then_folder_removed(
+        vec![
+            Event::FileReplaced {
+                path: "f/b.txt".into(),
+                from: 4,
+                to: 20,
+            },
+            Event::FolderRemoved("f".into(), 3),
+        ],
+        vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
+    )]
+    #[case::folder_removed_then_folder_added_same_inode_file_returns(
+        vec![
+            Event::FolderRemoved("f".into(), 3),
+            Event::FolderAdded("f".into(), 3),
+            Event::FileAdded("f/b.txt".into(), 4),
+        ],
+        vec![
+            SyncAction::Upload(path_buf("f/b.txt")),
+        ]
+    )]
+    #[case::folder_removed_then_folder_added_different_inode_different_file(
+        vec![
+            Event::FolderRemoved("f".into(), 3),
+            Event::FolderAdded("f".into(), 30),
+            Event::FileAdded("f/new.txt".into(), 50),
+        ],
+        vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::EnsureFolder(path_buf("f")),
+            SyncAction::Upload(path_buf("f/new.txt")),
+        ]
+    )]
+    #[case::folder_removed_then_folder_added_same_inode_different_file(
+        vec![
+            Event::FolderRemoved("f".into(), 3),
+            Event::FolderAdded("f".into(), 3),
+            Event::FileAdded("f/new.txt".into(), 50),
+        ],
+        vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::Upload(path_buf("f/new.txt")),
+        ]
+    )]
+    #[case::file_removed_from_folder_then_folder_removed(
+        vec![
+            Event::FileRemoved("f/b.txt".into(), 4),
+            Event::FolderRemoved("f".into(), 3),
+        ],
+        vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
+    )]
+    fn matrix_folder_removed_cases(#[case] events: Vec<Event>, #[case] expected: Vec<SyncAction>) {
         run_matrix_case(events, expected);
     }
 }
