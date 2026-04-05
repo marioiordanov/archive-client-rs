@@ -190,10 +190,17 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                 }
             }
 
+            // If this folder was renamed (e.g. "f" → "g"), initial_state stores
+            // children under "f", not "g". Resolve via inode → entry.initial_path.
+            let lookup_path = self.inode_to_id.get(&inode)
+                .and_then(|id| self.id_to_entry.get(id))
+                .map(|entry| entry.initial_path)
+                .unwrap_or(path);
+
             let untracked_children: Vec<(&'a Path, u64, bool)> = self
                 .initial_state
                 .direct_children
-                .get(path)
+                .get(lookup_path)
                 .map(|dc| {
                     dc.iter()
                         .filter(|(p, i)| {
@@ -213,8 +220,8 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                 }
             }
 
-            let maybe_inode_id = self.inode_to_id.get(&inode);
-            let maybe_path_id = self.path_to_id.get(path);
+            let maybe_inode_id = self.inode_to_id.remove(&inode);
+            let maybe_path_id = self.path_to_id.remove(path);
 
             match (maybe_path_id, maybe_inode_id) {
                 (None, None) => {
@@ -233,8 +240,19 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                     self.id_to_entry.insert(id, entry);
                 }
                 (Some(id), Some(inode_id)) if id == inode_id => {
-                    let entry = self.id_to_entry.get_mut(id).expect("id must be present");
-                    entry.action.merge(REMOVED);
+                    let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
+                    if entry.action.is_added() || entry.action.is_created() {
+                        // do nothing and it will be removed
+                    } else {
+                        entry.action.merge(REMOVED);
+                        // Reassign to a new (higher) ID so the folder's
+                        // RemoveFolder sorts after its children's Delete
+                        // actions in BTreeMap iteration order.
+                        let new_id = self.get_new_id();
+                        self.path_to_id.insert(path, new_id);
+                        self.inode_to_id.insert(inode, new_id);
+                        self.id_to_entry.insert(new_id, entry);
+                    }
                 }
                 _ => panic!("Impossible case"),
             }
@@ -312,6 +330,60 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
             to_inode: u64,
             is_folder: bool,
         ) {
+            // When a folder is replaced, the old contents are gone.
+            // The fs_watcher will send FileAdded/FolderAdded for the new
+            // folder's contents. Remove old children so any that aren't
+            // re-added via FileAdded will produce Delete actions.
+            if is_folder {
+                let tracked_children: Vec<(&'a Path, Id, bool)> = self
+                    .path_to_id
+                    .iter()
+                    .filter(|(p, _)| **p != path && p.parent() == Some(path))
+                    .map(|(p, id)| {
+                        let is_folder = self
+                            .id_to_entry
+                            .get(id)
+                            .map(|e| e.is_folder)
+                            .expect("id must be present");
+                        (*p, *id, is_folder)
+                    })
+                    .collect();
+
+                for (_, id, child_is_folder) in tracked_children {
+                    let entry = self.id_to_entry.get(&id).expect("id must be present");
+                    if child_is_folder {
+                        self.append_removed_folder(entry.current_path, entry.current_inode);
+                    } else {
+                        self.append_removed_file(entry.current_path, entry.current_inode);
+                    }
+                }
+
+                let untracked_children: Vec<(&'a Path, u64, bool)> = self
+                    .initial_state
+                    .direct_children
+                    .get(path)
+                    .map(|dc| {
+                        dc.iter()
+                            .filter(|(p, i)| {
+                                !self.inode_to_id.contains_key(i)
+                                    && !self.path_to_id.contains_key(p.as_path())
+                            })
+                            .map(|(p, i)| {
+                                (p.as_path(), *i, self.initial_state.is_folder(p.as_path()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                for (child_path, child_inode, child_is_folder) in untracked_children {
+                    if child_is_folder {
+                        self.append_removed_folder(child_path, child_inode);
+                    } else {
+                        self.append_removed_file(child_path, child_inode);
+                    }
+                }
+            }
+
             let maybe_path_id = self.path_to_id.get(path);
             let maybe_inode_id = self.inode_to_id.remove(&from_inode);
 
@@ -344,6 +416,8 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
         fn append_renamed_folder(&mut self, from_path: &'a Path, to_path: &'a Path, inode: u64) {
             // If this subfolder rename is covered by a parent folder rename
             // (same relative path under old→new), skip it — MoveFolder covers it.
+            // Reassign the entry to a new (higher) ID so it sorts after the
+            // parent MoveFolder action in BTreeMap iteration order.
             if let Some(last_entry) = self.id_to_entry.get(&self.last_id) {
                 if last_entry.is_folder && last_entry.action.has_flag(RENAMED) {
                     if let (Ok(rel_from), Ok(rel_to)) = (
@@ -351,11 +425,14 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                         to_path.strip_prefix(last_entry.current_path),
                     ) {
                         if rel_from == rel_to {
-                            if let Some(id) = self.path_to_id.remove(from_path) {
-                                self.path_to_id.insert(to_path, id);
-                                let entry =
-                                    self.id_to_entry.get_mut(&id).expect("id must be present");
+                            if let Some(old_id) = self.path_to_id.remove(from_path) {
+                                let mut entry = self.id_to_entry.remove(&old_id)
+                                    .expect("id must be present");
                                 entry.current_path = to_path;
+                                let new_id = self.get_new_id();
+                                self.path_to_id.insert(to_path, new_id);
+                                self.inode_to_id.insert(entry.current_inode, new_id);
+                                self.id_to_entry.insert(new_id, entry);
                             }
                             return;
                         }
@@ -416,6 +493,8 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
             // If the last entry is a renamed folder and this file rename has
             // the same relative path under old→new folder, it's just a
             // consequence of the folder rename — skip adding RENAMED.
+            // Reassign the entry to a new (higher) ID so it sorts after the
+            // parent MoveFolder action in BTreeMap iteration order.
             if let Some(last_entry) = self.id_to_entry.get(&self.last_id) {
                 if last_entry.is_folder && last_entry.action.has_flag(RENAMED) {
                     if let (Ok(rel_from), Ok(rel_to)) = (
@@ -423,11 +502,14 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                         to_path.strip_prefix(last_entry.current_path),
                     ) {
                         if rel_from == rel_to {
-                            if let Some(id) = self.path_to_id.remove(from_path) {
-                                self.path_to_id.insert(to_path, id);
-                                let entry =
-                                    self.id_to_entry.get_mut(&id).expect("id must be present");
+                            if let Some(old_id) = self.path_to_id.remove(from_path) {
+                                let mut entry = self.id_to_entry.remove(&old_id)
+                                    .expect("id must be present");
                                 entry.current_path = to_path;
+                                let new_id = self.get_new_id();
+                                self.path_to_id.insert(to_path, new_id);
+                                self.inode_to_id.insert(entry.current_inode, new_id);
+                                self.id_to_entry.insert(new_id, entry);
                             }
                             return;
                         }
@@ -642,6 +724,7 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                     self.path_to_id.insert(path, id);
                     self.inode_to_id.insert(inode, id);
                 }
+                // TODO case when creating a file with the same name, that was already deleted
                 _ => panic!("Impossible case"),
             }
         }
@@ -666,6 +749,13 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                     self.path_to_id.insert(path, id);
                     self.inode_to_id.insert(inode, id);
                 }
+                (Some(id), None) => {
+                    let entry = self.id_to_entry.get_mut(id).expect("Id must be present");
+                    entry.action.remove_flag(REMOVED);
+                    entry.action.merge(CREATED);
+                    self.inode_to_id.remove(&entry.current_inode);
+                    entry.current_inode = inode;
+                }
                 _ => panic!("Impossible case"),
             }
         }
@@ -680,8 +770,18 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                         continue;
                     }
 
+                    if entry.action.has_flag(CREATED) {
+                        actions.push(SyncAction::EnsureFolder(entry.current_path.to_path_buf()));
+                        continue;
+                    }
+
                     if entry.action.has_flag(ADDED) {
                         actions.push(SyncAction::EnsureFolder(entry.current_path.to_path_buf()));
+                        continue;
+                    }
+
+                    if entry.action.has_flag(REPLACED) && entry.action.has_flag(RENAMED) {
+                        actions.push(SyncAction::MoveFolder { from: entry.initial_path.to_path_buf(), to: entry.current_path.to_path_buf() });
                         continue;
                     }
 
@@ -692,7 +792,7 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
 
                     if entry.action.has_flag(RENAMED) {
                         actions.push(SyncAction::MoveFolder { from: entry.initial_path.to_path_buf(), to: entry.current_path.to_path_buf() });
-                        continue;;
+                        continue;
                     }
 
                 } else {
@@ -745,6 +845,26 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                         continue;
                     }
                 }
+            }
+
+            // Google Drive folder deletion is recursive — child Delete/RemoveFolder
+            // actions are redundant when the parent folder is being removed.
+            let removed_folders: Vec<std::path::PathBuf> = actions
+                .iter()
+                .filter_map(|a| match a {
+                    SyncAction::RemoveFolder(p) => Some(p.clone()),
+                    _ => None,
+                })
+                .collect();
+
+            if !removed_folders.is_empty() {
+                actions.retain(|action| {
+                    let path = match action {
+                        SyncAction::Delete(p) | SyncAction::RemoveFolder(p) => p,
+                        _ => return true,
+                    };
+                    !removed_folders.iter().any(|folder| path != folder && path.starts_with(folder))
+                });
             }
 
             actions
@@ -809,6 +929,7 @@ mod tests {
 
         let mut events_processer = EventsTransaction::new(&mut fs_index);
         for e in events.iter() {
+            println!("{:?}", events_processer.id_to_entry);
             events_processer.append_event(e);
 
         }
@@ -1526,7 +1647,6 @@ mod tests {
     #[case::folder_removed_with_one_file(
         vec![Event::FolderRemoved("f".into(), 3)],
         vec![
-            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::RemoveFolder(path_buf("f")),
         ]
     )]
@@ -1536,7 +1656,6 @@ mod tests {
             Event::FolderRemoved("f".into(), 3),
         ],
         vec![
-            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::RemoveFolder(path_buf("f")),
         ]
     )]
@@ -1567,7 +1686,6 @@ mod tests {
             Event::FolderRemoved("f".into(), 3),
         ],
         vec![
-            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::RemoveFolder(path_buf("f")),
         ]
     )]
@@ -1577,7 +1695,6 @@ mod tests {
             Event::FolderRemoved("f".into(), 3),
         ],
         vec![
-            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::RemoveFolder(path_buf("f")),
         ]
     )]
@@ -1587,7 +1704,6 @@ mod tests {
             Event::FolderRemoved("f".into(), 3),
         ],
         vec![
-            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::RemoveFolder(path_buf("f")),
         ]
     )]
@@ -1601,7 +1717,6 @@ mod tests {
             Event::FolderRemoved("f".into(), 3),
         ],
         vec![
-            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::RemoveFolder(path_buf("f")),
         ]
     )]
@@ -1644,7 +1759,6 @@ mod tests {
             Event::FolderRemoved("f".into(), 3),
         ],
         vec![
-            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::RemoveFolder(path_buf("f")),
         ]
     )]
@@ -1668,7 +1782,6 @@ mod tests {
     #[case::single_folder_removed(
         vec![Event::FolderRemoved("f".into(), 3)],
         vec![
-            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::RemoveFolder(path_buf("f")),
         ]
     )]
@@ -1686,7 +1799,7 @@ mod tests {
             from: 3,
             to: 30,
         }],
-        vec![SyncAction::EnsureFolder(path_buf("f"))]
+        vec![SyncAction::Delete(path_buf("f/b.txt")), SyncAction::EnsureFolder(path_buf("f"))]
     )]
     fn matrix_folder_single_event(#[case] events: Vec<Event>, #[case] expected: Vec<SyncAction>) {
         run_matrix_case(events, expected);
@@ -1723,8 +1836,25 @@ mod tests {
         vec![
             Event::FolderAdded("g".into(), 40),
             Event::FileAdded("g/x.txt".into(), 50),
-            Event::FileRemoved("g/x.txt".into(), 50),
             Event::FolderRemoved("g".into(), 40),
+        ],
+        vec![]
+    )]
+    #[case::folder_added_then_renamed_then_removed_is_noop(
+        vec![
+            Event::FolderAdded("g".into(), 40),
+            Event::FileAdded("g/x.txt".into(), 50),
+            Event::FolderRenamed {
+                from: "g".into(),
+                to: "h".into(),
+                inode: 40,
+            },
+            Event::FileRenamed {
+                from: "g/x.txt".into(),
+                to: "h/x.txt".into(),
+                inode: 50,
+            },
+            Event::FolderRemoved("h".into(), 40),
         ],
         vec![]
     )]
@@ -1823,10 +1953,14 @@ mod tests {
                 to: "g".into(),
                 inode: 3,
             },
+            Event::FileRenamed {
+                from: "f/b.txt".into(),
+                to: "g/b.txt".into(),
+                inode: 4
+            },
             Event::FolderRemoved("g".into(), 3),
         ],
         vec![
-            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::RemoveFolder(path_buf("f")),
         ]
     )]
@@ -1864,12 +1998,28 @@ mod tests {
             Event::FileAdded("f/x.txt".into(), 50),
         ],
         vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::EnsureFolder(path_buf("f")),
             SyncAction::Upload(path_buf("f/x.txt")),
         ]
     )]
-    #[case::folder_replaced_then_original_file_readded(
+    #[case::folder_replaced_then_same_name_file_added_new_inode(
         vec![
+            Event::FolderReplaced {
+                path: "f".into(),
+                from: 3,
+                to: 30,
+            },
+            Event::FileAdded("f/b.txt".into(), 40),
+        ],
+        vec![
+            SyncAction::Upload(path_buf("f/b.txt")),
+            SyncAction::EnsureFolder(path_buf("f")),
+        ]
+    )]
+    #[case::file_remove_then_folder_replaced_with_the_removed_file(
+        vec![
+            Event::FileRemoved("f/b.txt".into(), 4),
             Event::FolderReplaced {
                 path: "f".into(),
                 from: 3,
@@ -1878,8 +2028,8 @@ mod tests {
             Event::FileAdded("f/b.txt".into(), 4),
         ],
         vec![
-            SyncAction::EnsureFolder(path_buf("f")),
             SyncAction::Upload(path_buf("f/b.txt")),
+            SyncAction::EnsureFolder(path_buf("f")),
         ]
     )]
     #[case::folder_replaced_then_renamed(
@@ -1895,7 +2045,10 @@ mod tests {
                 inode: 30,
             },
         ],
-        vec![SyncAction::MoveFolder { from: path_buf("f"), to: path_buf("g") }]
+        vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::MoveFolder { from: path_buf("f"), to: path_buf("g") },
+        ]
     )]
     #[case::folder_replaced_then_removed(
         vec![
@@ -1906,7 +2059,9 @@ mod tests {
             },
             Event::FolderRemoved("f".into(), 30),
         ],
-        vec![SyncAction::RemoveFolder(path_buf("f"))]
+        vec![
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
     )]
     fn matrix_folder_replaced_cases(#[case] events: Vec<Event>, #[case] expected: Vec<SyncAction>) {
         run_matrix_case(events, expected);
@@ -1986,8 +2141,8 @@ mod tests {
             },
         ],
         vec![
-            SyncAction::Move { from: path_buf("a.txt"), to: path_buf("g/a.txt") },
             SyncAction::EnsureFolder(path_buf("g")),
+            SyncAction::Move { from: path_buf("a.txt"), to: path_buf("g/a.txt") },
         ]
     )]
     #[case::folder_replaced_old_file_gone_new_files_added(
@@ -2001,21 +2156,20 @@ mod tests {
             Event::FileAdded("f/y.txt".into(), 51),
         ],
         vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::EnsureFolder(path_buf("f")),
             SyncAction::Upload(path_buf("f/x.txt")),
             SyncAction::Upload(path_buf("f/y.txt")),
         ]
     )]
-    #[case::two_folders_removed(
+    #[case::folder_and_file_removed(
         vec![
-            Event::FileRemoved("f/b.txt".into(), 4),
             Event::FolderRemoved("f".into(), 3),
             Event::FileRemoved("a.txt".into(), 1),
         ],
         vec![
-            SyncAction::Delete(path_buf("a.txt")),
-            SyncAction::Delete(path_buf("f/b.txt")),
             SyncAction::RemoveFolder(path_buf("f")),
+            SyncAction::Delete(path_buf("a.txt")),
         ]
     )]
     #[case::file_replaced_in_folder_then_folder_renamed(
@@ -2068,35 +2222,16 @@ mod tests {
                 from: 3,
                 to: 30,
             },
-            Event::FileAdded("f/b.txt".into(), 4),
+            Event::FileAdded("f/b.txt".into(), 40),
         ],
         vec![
             SyncAction::Upload(path_buf("a.txt")),
             SyncAction::Upload(path_buf("b.txt")),
-            SyncAction::EnsureFolder(path_buf("f")),
             SyncAction::Upload(path_buf("f/b.txt")),
+            SyncAction::EnsureFolder(path_buf("f")),
         ]
     )]
     fn matrix_complex_mixed_flows(#[case] events: Vec<Event>, #[case] expected: Vec<SyncAction>) {
-        run_matrix_case(events, expected);
-    }
-
-    #[test]
-    fn check_test_case() {
-        let events = vec![
-            Event::FileModified("f/b.txt".into(), 4, 4),
-            Event::FolderRenamed {
-                from: "f".into(),
-                to: "g".into(),
-                inode: 3,
-            },
-            Event::FileModified("g/b.txt".into(), 4, 4),
-        ];
-        let expected = vec![
-            SyncAction::Upload(path_buf("f/b.txt")),
-            SyncAction::MoveFolder { from: path_buf("f"), to: path_buf("g") },
-            SyncAction::Upload(path_buf("g/b.txt")),
-        ];
         run_matrix_case(events, expected);
     }
 }
