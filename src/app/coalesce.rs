@@ -190,17 +190,10 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                 }
             }
 
-            // If this folder was renamed (e.g. "f" → "g"), initial_state stores
-            // children under "f", not "g". Resolve via inode → entry.initial_path.
-            let lookup_path = self.inode_to_id.get(&inode)
-                .and_then(|id| self.id_to_entry.get(id))
-                .map(|entry| entry.initial_path)
-                .unwrap_or(path);
-
             let untracked_children: Vec<(&'a Path, u64, bool)> = self
                 .initial_state
                 .direct_children
-                .get(lookup_path)
+                .get(path)
                 .map(|dc| {
                     dc.iter()
                         .filter(|(p, i)| {
@@ -794,9 +787,10 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                 }
             }
 
-            // Google Drive folder move is recursive — child Move/MoveAndUpload
-            // actions that mirror the parent MoveFolder are redundant.
-            // If the child also has modifications, downgrade to Upload.
+            // --- Post-processing for Google Drive semantics ---
+
+            // 1. Folder move is recursive: drop redundant child moves,
+            //    downgrade MoveAndUpload to Upload when the move part is covered.
             let moved_folders: Vec<(std::path::PathBuf, std::path::PathBuf)> = actions
                 .iter()
                 .filter_map(|a| match a {
@@ -806,102 +800,29 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                 .collect();
 
             if !moved_folders.is_empty() {
-                let mut new_actions = Vec::with_capacity(actions.len());
-                for action in actions {
-                    match &action {
-                        SyncAction::Move { from, to } => {
-                            if moved_folders.iter().any(|(ff, ft)| {
-                                from.starts_with(ff)
-                                    && to.starts_with(ft)
-                                    && from.strip_prefix(ff) == to.strip_prefix(ft)
-                            }) {
-                                // pure rename covered by parent MoveFolder — drop
-                                continue;
-                            }
-                            new_actions.push(action);
-                        }
-                        SyncAction::MoveAndUpload { from, to } => {
-                            if moved_folders.iter().any(|(ff, ft)| {
-                                from.starts_with(ff)
-                                    && to.starts_with(ft)
-                                    && from.strip_prefix(ff) == to.strip_prefix(ft)
-                            }) {
-                                // move covered by parent — keep only the upload
-                                new_actions.push(SyncAction::Upload(to.clone()));
-                                continue;
-                            }
-                            new_actions.push(action);
-                        }
-                        SyncAction::MoveFolder { from, to } => {
-                            if moved_folders.iter().any(|(ff, ft)| {
-                                from != ff
-                                    && from.starts_with(ff)
-                                    && to.starts_with(ft)
-                                    && from.strip_prefix(ff) == to.strip_prefix(ft)
-                            }) {
-                                // subfolder move covered by parent MoveFolder — drop
-                                continue;
-                            }
-                            new_actions.push(action);
-                        }
-                        _ => new_actions.push(action),
-                    }
-                }
-                actions = new_actions;
-            }
+                let is_covered = |from: &Path, to: &Path, exclude_self: bool| {
+                    moved_folders.iter().any(|(ff, ft)| {
+                        (!exclude_self || from != ff.as_path())
+                            && from.starts_with(ff)
+                            && to.starts_with(ft)
+                            && from.strip_prefix(ff) == to.strip_prefix(ft)
+                    })
+                };
 
-            // Ensure MoveFolder actions precede any child actions that reference
-            // paths under the destination folder. E.g. MoveFolder { f→g } must
-            // come before Upload("g/b.txt") because the folder must exist at the
-            // new path before we can upload into it.
-            {
-                let mf_dests: Vec<(std::path::PathBuf, std::path::PathBuf)> = actions
-                    .iter()
-                    .filter_map(|a| match a {
-                        SyncAction::MoveFolder { from, to } => Some((from.clone(), to.clone())),
-                        _ => None,
+                actions = actions
+                    .into_iter()
+                    .filter_map(|action| match &action {
+                        SyncAction::Move { from, to } if is_covered(from, to, false) => None,
+                        SyncAction::MoveAndUpload { to, from } if is_covered(from, to, false) => {
+                            Some(SyncAction::Upload(to.clone()))
+                        }
+                        SyncAction::MoveFolder { from, to } if is_covered(from, to, true) => None,
+                        _ => Some(action),
                     })
                     .collect();
-
-                if !mf_dests.is_empty() {
-                    let mut result = Vec::with_capacity(actions.len());
-                    let mut buffered: Vec<Vec<SyncAction>> = vec![Vec::new(); mf_dests.len()];
-                    let mut seen: Vec<bool> = vec![false; mf_dests.len()];
-
-                    for action in actions {
-                        if let SyncAction::MoveFolder { ref from, ref to } = action {
-                            if let Some(i) = mf_dests.iter().position(|(f, t)| f == from && t == to) {
-                                seen[i] = true;
-                                result.push(action);
-                                result.extend(buffered[i].drain(..));
-                                continue;
-                            }
-                        }
-
-                        let target = match &action {
-                            SyncAction::Upload(p) | SyncAction::Delete(p)
-                            | SyncAction::EnsureFolder(p) | SyncAction::RemoveFolder(p) => p.as_path(),
-                            SyncAction::MoveAndUpload { to, .. }
-                            | SyncAction::Move { to, .. }
-                            | SyncAction::MoveFolder { to, .. } => to.as_path(),
-                        };
-
-                        match mf_dests.iter().position(|(_, to)| target.starts_with(to)) {
-                            Some(i) if !seen[i] => buffered[i].push(action),
-                            _ => result.push(action),
-                        }
-                    }
-
-                    for buf in buffered {
-                        result.extend(buf);
-                    }
-
-                    actions = result;
-                }
             }
 
-            // Google Drive folder deletion is recursive — child Delete/RemoveFolder
-            // actions are redundant when the parent folder is being removed.
+            // 2. Folder deletion is recursive: drop redundant child deletions.
             let removed_folders: Vec<std::path::PathBuf> = actions
                 .iter()
                 .filter_map(|a| match a {
@@ -919,6 +840,47 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                     !removed_folders.iter().any(|folder| path != folder && path.starts_with(folder))
                 });
             }
+
+            // 3. Ensure folder operations precede actions on their children.
+            //    E.g. MoveFolder { f→g } before Upload("g/b.txt"),
+            //    EnsureFolder("g") before Upload("g/x.txt").
+            //    Uses stable sort so unrelated actions keep BTreeMap insertion order.
+            fn folder_dest(action: &SyncAction) -> Option<&Path> {
+                match action {
+                    SyncAction::MoveFolder { to, .. } => Some(to.as_path()),
+                    _ => None,
+                }
+            }
+
+            fn action_path(action: &SyncAction) -> &Path {
+                match action {
+                    SyncAction::Upload(p)
+                    | SyncAction::Delete(p)
+                    | SyncAction::EnsureFolder(p)
+                    | SyncAction::RemoveFolder(p) => p.as_path(),
+                    SyncAction::MoveAndUpload { to, .. }
+                    | SyncAction::Move { to, .. }
+                    | SyncAction::MoveFolder { to, .. } => to.as_path(),
+                }
+            }
+
+            actions.sort_by(|a, b| {
+                use std::cmp::Ordering;
+
+                if let Some(fd) = folder_dest(a) {
+                    let bp = action_path(b);
+                    if bp.starts_with(fd) && bp != fd {
+                        return Ordering::Less;
+                    }
+                }
+                if let Some(fd) = folder_dest(b) {
+                    let ap = action_path(a);
+                    if ap.starts_with(fd) && ap != fd {
+                        return Ordering::Greater;
+                    }
+                }
+                Ordering::Equal
+            });
 
             actions
         }
