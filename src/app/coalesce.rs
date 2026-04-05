@@ -1,171 +1,328 @@
-use std::{collections::{BTreeMap, HashMap}, path::Path};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+};
 
 use fs_watcher::Event;
 
 use crate::app::{fs_index::FsIndex, message::SyncAction};
 
 #[derive(Clone, Copy)]
-    struct BitFlag(u8);
-    const RENAMED: BitFlag = BitFlag(0b00001);
-    const MODIFIED: BitFlag = BitFlag(0b00010);
-    const REMOVED: BitFlag = BitFlag(0b00100);
-    const CREATED: BitFlag = BitFlag(0b01000);
-    const ADDED: BitFlag = BitFlag(0b10000);
-    const REPLACED: BitFlag = BitFlag(0b100000);
+struct BitFlag(u8);
+const RENAMED: BitFlag = BitFlag(0b00001);
+const MODIFIED: BitFlag = BitFlag(0b00010);
+const REMOVED: BitFlag = BitFlag(0b00100);
+const CREATED: BitFlag = BitFlag(0b01000);
+const ADDED: BitFlag = BitFlag(0b10000);
+const REPLACED: BitFlag = BitFlag(0b100000);
 
-    impl BitFlag {
-        fn has_flag(&self, flag: BitFlag) -> bool {
-            (self.0 & flag.0) != 0
+impl BitFlag {
+    fn has_flag(&self, flag: BitFlag) -> bool {
+        (self.0 & flag.0) != 0
+    }
+
+    fn is_renamed(&self) -> bool {
+        self.has_flag(RENAMED)
+    }
+
+    fn is_modified(&self) -> bool {
+        self.has_flag(MODIFIED)
+    }
+
+    fn is_removed(&self) -> bool {
+        self.has_flag(REMOVED)
+    }
+
+    fn is_created(&self) -> bool {
+        self.has_flag(CREATED)
+    }
+
+    fn is_added(&self) -> bool {
+        self.has_flag(ADDED)
+    }
+
+    fn is_replaced(&self) -> bool {
+        self.has_flag(REPLACED)
+    }
+
+    fn merge(&mut self, flag: BitFlag) {
+        self.0 |= flag.0;
+    }
+
+    fn remove_flag(&mut self, flag: BitFlag) {
+        self.0 &= !flag.0
+    }
+
+    fn has_any_flag(&self) -> bool {
+        self.0 > 0
+    }
+}
+
+impl std::fmt::Debug for BitFlag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut flags = vec![];
+        if self.is_renamed() {
+            flags.push("renamed");
         }
 
-        fn is_renamed(&self) -> bool {
-            self.has_flag(RENAMED)
+        if self.is_added() {
+            flags.push("added");
         }
 
-        fn is_modified(&self) -> bool {
-            self.has_flag(MODIFIED)
+        if self.is_created() {
+            flags.push("created");
         }
 
-        fn is_removed(&self) -> bool {
-            self.has_flag(REMOVED)
+        if self.is_removed() {
+            flags.push("removed");
         }
 
-        fn is_created(&self) -> bool {
-            self.has_flag(CREATED)
+        if self.is_modified() {
+            flags.push("modified");
         }
 
-        fn is_added(&self) -> bool {
-            self.has_flag(ADDED)
+        if self.is_replaced() {
+            flags.push("replaced");
         }
 
-        fn is_replaced(&self) -> bool {
-            self.has_flag(REPLACED)
-        }
+        f.debug_list().entries(flags.iter()).finish()
+    }
+}
 
-        fn merge(&mut self, flag: BitFlag) {
-            self.0 |= flag.0;
-        }
+#[derive(Debug)]
+struct IdEntry<'a> {
+    action: BitFlag,
+    initial_path: &'a Path,
+    initial_inode: u64,
+    is_folder: bool,
+    current_path: &'a Path,
+    current_inode: u64,
+}
 
-        fn remove_flag(&mut self, flag: BitFlag) {
-            self.0 &= !flag.0
-        }
+pub(crate) struct EventsTransaction<'a> {
+    initial_state: &'a FsIndex,
+    path_to_id: HashMap<&'a Path, Id>,
+    inode_to_id: HashMap<u64, Id>,
+    id_to_entry: BTreeMap<Id, IdEntry<'a>>,
+    last_id: u32,
+}
 
-        fn has_any_flag(&self) -> bool {
-            self.0 > 0
+impl<'a> EventsTransaction<'a> {
+    pub(crate) fn new(initial_state: &'a FsIndex) -> Self {
+        Self {
+            initial_state,
+            path_to_id: HashMap::new(),
+            inode_to_id: HashMap::new(),
+            id_to_entry: BTreeMap::new(),
+            last_id: 0,
         }
     }
 
-    impl std::fmt::Debug for BitFlag {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let mut flags = vec![];
-            if self.is_renamed() {
-                flags.push("renamed");
-            }
+    fn get_new_id(&mut self) -> u32 {
+        self.last_id += 1;
+        self.last_id
+    }
 
-            if self.is_added() {
-                flags.push("added");
+    pub(crate) fn append_event(&mut self, event: &'a Event) {
+        match event {
+            Event::FileCreated(path, inode) => self.append_created_file(path.as_path(), *inode),
+            Event::FileRemoved(path_buf, inode) => {
+                self.append_removed_file(path_buf.as_path(), *inode)
             }
-
-            if self.is_created() {
-                flags.push("created");
+            Event::FileAdded(path_buf, inode) => self.append_added_file(path_buf.as_path(), *inode),
+            Event::FileModified(path_buf, old_inode, new_inode) => {
+                if old_inode == new_inode {
+                    self.append_modified(path_buf.as_path(), *old_inode);
+                } else {
+                    self.append_modified_with_inode_change(
+                        path_buf.as_path(),
+                        *old_inode,
+                        *new_inode,
+                    );
+                }
             }
-
-            if self.is_removed() {
-                flags.push("removed");
+            Event::FileRenamed { from, to, inode } => {
+                self.append_renamed_file(from, to, *inode);
             }
-
-            if self.is_modified() {
-                flags.push("modified");
+            Event::FileReplaced { path, from, to } => {
+                self.append_replaced(path.as_path(), *from, *to, false)
             }
-
-            if self.is_replaced() {
-                flags.push("replaced");
+            Event::FolderRemoved(path_buf, inode) => {
+                self.append_removed_folder(path_buf.as_path(), *inode)
             }
-
-            f.debug_list().entries(flags.iter()).finish()
+            Event::FolderAdded(path_buf, inode) => {
+                self.append_added_folder(path_buf.as_path(), *inode);
+            }
+            Event::FolderCreated(path_buf, inode) => {
+                self.append_created_folder(path_buf.as_path(), *inode);
+            }
+            Event::FolderRenamed { from, to, inode } => {
+                self.append_renamed_folder(from.as_path(), to.as_path(), *inode);
+            }
+            Event::FolderReplaced { path, from, to } => {
+                self.append_replaced(path.as_path(), *from, *to, true);
+            }
         }
     }
 
-    #[derive(Debug)]
-    struct IdEntry<'a> {
-        action: BitFlag,
-        initial_path: &'a Path,
-        initial_inode: u64,
-        is_folder: bool,
-        current_path: &'a Path,
-        current_inode: u64,
-    }
+    fn append_removed_folder(&mut self, path: &'a Path, inode: u64) {
+        // go through the tracked children
+        let tracked_children: Vec<(&'a Path, Id, bool)> = self
+            .path_to_id
+            .iter()
+            .filter(|(p, _)| **p != path && p.parent() == Some(path))
+            .map(|(p, id)| {
+                let is_folder = self
+                    .id_to_entry
+                    .get(id)
+                    .map(|e| e.is_folder)
+                    .expect("id must be present");
 
-    struct EventsTransaction<'a> {
-        initial_state: &'a FsIndex,
-        path_to_id: HashMap<&'a Path, Id>,
-        inode_to_id: HashMap<u64, Id>,
-        id_to_entry: BTreeMap<Id, IdEntry<'a>>,
-        last_id: u32,
-    }
+                (*p, *id, is_folder)
+            })
+            .collect();
 
-    impl<'a> EventsTransaction<'a> {
-        fn new(initial_state: &'a FsIndex) -> Self {
-            Self {
-                initial_state,
-                path_to_id: HashMap::new(),
-                inode_to_id: HashMap::new(),
-                id_to_entry: BTreeMap::new(),
-                last_id: 0,
+        for (_, id, is_folder) in tracked_children {
+            let entry = self.id_to_entry.get(&id).expect("id must be present");
+            if is_folder {
+                self.append_removed_folder(entry.current_path, entry.current_inode);
+            } else {
+                self.append_removed_file(entry.current_path, entry.current_inode);
             }
         }
 
-        fn get_new_id(&mut self) -> u32 {
-            self.last_id += 1;
-            self.last_id
-        }
+        let untracked_children: Vec<(&'a Path, u64, bool)> = self
+            .initial_state
+            .direct_children
+            .get(path)
+            .map(|dc| {
+                dc.iter()
+                    .filter(|(p, i)| {
+                        !self.inode_to_id.contains_key(i)
+                            && !self.path_to_id.contains_key(p.as_path())
+                    })
+                    .map(|(p, i)| (p.as_path(), *i, self.initial_state.is_folder(p.as_path())))
+                    .collect()
+            })
+            .unwrap_or_default();
 
-        fn append_event(&mut self, event: &'a Event) {
-            match event {
-                Event::FileCreated(path, inode) => self.append_created_file(path.as_path(), *inode),
-                Event::FileRemoved(path_buf, inode) => {
-                    self.append_removed_file(path_buf.as_path(), *inode)
-                }
-                Event::FileAdded(path_buf, inode) => {
-                    self.append_added_file(path_buf.as_path(), *inode)
-                }
-                Event::FileModified(path_buf, old_inode, new_inode) => {
-                    if old_inode == new_inode {
-                        self.append_modified(path_buf.as_path(), *old_inode);
-                    } else {
-                        self.append_modified_with_inode_change(
-                            path_buf.as_path(),
-                            *old_inode,
-                            *new_inode,
-                        );
-                    }
-                }
-                Event::FileRenamed { from, to, inode } => {
-                    self.append_renamed_file(from, to, *inode);
-                }
-                Event::FileReplaced { path, from, to } => {
-                    self.append_replaced(path.as_path(), *from, *to, false)
-                }
-                Event::FolderRemoved(path_buf, inode) => {
-                    self.append_removed_folder(path_buf.as_path(), *inode)
-                }
-                Event::FolderAdded(path_buf, inode) => {
-                    self.append_added_folder(path_buf.as_path(), *inode);
-                }
-                Event::FolderCreated(path_buf, inode) => {
-                    self.append_created_folder(path_buf.as_path(), *inode);
-                }
-                Event::FolderRenamed { from, to, inode } => {
-                    self.append_renamed_folder(from.as_path(), to.as_path(), *inode);
-                }
-                Event::FolderReplaced { path, from, to } => {
-                    self.append_replaced(path.as_path(), *from, *to, true);
-                }
+        for (child_path, child_inode, is_folder) in untracked_children {
+            if is_folder {
+                self.append_removed_folder(child_path, child_inode);
+            } else {
+                self.append_removed_file(child_path, child_inode);
             }
         }
 
-        fn append_removed_folder(&mut self, path: &'a Path, inode: u64) {
-            // go through the tracked children
+        let maybe_inode_id = self.inode_to_id.remove(&inode);
+        let maybe_path_id = self.path_to_id.remove(path);
+
+        match (maybe_path_id, maybe_inode_id) {
+            (None, None) => {
+                let id = self.get_new_id();
+                let entry = IdEntry {
+                    action: REMOVED,
+                    is_folder: true,
+                    initial_path: path,
+                    initial_inode: inode,
+                    current_path: path,
+                    current_inode: inode,
+                };
+
+                self.path_to_id.insert(path, id);
+                self.inode_to_id.insert(inode, id);
+                self.id_to_entry.insert(id, entry);
+            }
+            (Some(id), Some(inode_id)) if id == inode_id => {
+                let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
+                if entry.action.is_added() || entry.action.is_created() {
+                    // do nothing and it will be removed
+                } else {
+                    entry.action.merge(REMOVED);
+                    // Reassign to a new (higher) ID so the folder's
+                    // RemoveFolder sorts after its children's Delete
+                    // actions in BTreeMap iteration order.
+                    let new_id = self.get_new_id();
+                    self.path_to_id.insert(path, new_id);
+                    self.inode_to_id.insert(inode, new_id);
+                    self.id_to_entry.insert(new_id, entry);
+                }
+            }
+            _ => panic!("Impossible case"),
+        }
+    }
+
+    // path doesn't change, inode doesnt change
+    fn append_modified(&mut self, path: &'a Path, inode: u64) {
+        let maybe_path_id = self.path_to_id.get(path);
+        let maybe_inode_id = self.inode_to_id.get(&inode);
+
+        match (maybe_path_id, maybe_inode_id) {
+            (Some(id), Some(inode_id)) if id == inode_id => {
+                let entry = self.id_to_entry.get_mut(id).expect("id must be present");
+                entry.action.merge(MODIFIED);
+            }
+            (None, None) => {
+                let id = self.get_new_id();
+                let entry = IdEntry {
+                    action: MODIFIED,
+                    is_folder: false,
+                    initial_path: path,
+                    initial_inode: inode,
+                    current_path: path,
+                    current_inode: inode,
+                };
+
+                self.id_to_entry.insert(id, entry);
+                self.path_to_id.insert(path, id);
+                self.inode_to_id.insert(inode, id);
+            }
+            _ => panic!("Impossible case"),
+        }
+    }
+
+    // path doesn't change, inode changes
+    fn append_modified_with_inode_change(
+        &mut self,
+        path: &'a Path,
+        old_inode: u64,
+        new_inode: u64,
+    ) {
+        let maybe_path_id = self.path_to_id.get(path);
+        let maybe_inode_id = self.inode_to_id.remove(&old_inode);
+
+        match (maybe_path_id, maybe_inode_id) {
+            (Some(id), Some(inode_id)) if *id == inode_id => {
+                self.inode_to_id.insert(new_inode, inode_id);
+                let entry = self.id_to_entry.get_mut(id).expect("id must be present");
+                entry.action.merge(MODIFIED);
+                entry.current_inode = new_inode;
+            }
+            (None, None) => {
+                let entry = IdEntry {
+                    action: MODIFIED,
+                    is_folder: false,
+                    initial_path: path,
+                    initial_inode: old_inode,
+                    current_path: path,
+                    current_inode: new_inode,
+                };
+
+                let id = self.get_new_id();
+                self.path_to_id.insert(path, id);
+                self.inode_to_id.insert(new_inode, id);
+                self.id_to_entry.insert(id, entry);
+            }
+            _ => panic!("Impossible case"),
+        }
+    }
+
+    fn append_replaced(&mut self, path: &'a Path, from_inode: u64, to_inode: u64, is_folder: bool) {
+        // When a folder is replaced, the old contents are gone.
+        // The fs_watcher will send FileAdded/FolderAdded for the new
+        // folder's contents. Remove old children so any that aren't
+        // re-added via FileAdded will produce Delete actions.
+        if is_folder {
             let tracked_children: Vec<(&'a Path, Id, bool)> = self
                 .path_to_id
                 .iter()
@@ -176,14 +333,13 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                         .get(id)
                         .map(|e| e.is_folder)
                         .expect("id must be present");
-
                     (*p, *id, is_folder)
                 })
                 .collect();
 
-            for (_, id, is_folder) in tracked_children {
+            for (_, id, child_is_folder) in tracked_children {
                 let entry = self.id_to_entry.get(&id).expect("id must be present");
-                if is_folder {
+                if child_is_folder {
                     self.append_removed_folder(entry.current_path, entry.current_inode);
                 } else {
                     self.append_removed_file(entry.current_path, entry.current_inode);
@@ -205,688 +361,527 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                 })
                 .unwrap_or_default();
 
-            for (child_path, child_inode, is_folder) in untracked_children {
-                if is_folder {
+            for (child_path, child_inode, child_is_folder) in untracked_children {
+                if child_is_folder {
                     self.append_removed_folder(child_path, child_inode);
                 } else {
                     self.append_removed_file(child_path, child_inode);
                 }
             }
-
-            let maybe_inode_id = self.inode_to_id.remove(&inode);
-            let maybe_path_id = self.path_to_id.remove(path);
-
-            match (maybe_path_id, maybe_inode_id) {
-                (None, None) => {
-                    let id = self.get_new_id();
-                    let entry = IdEntry {
-                        action: REMOVED,
-                        is_folder: true,
-                        initial_path: path,
-                        initial_inode: inode,
-                        current_path: path,
-                        current_inode: inode,
-                    };
-
-                    self.path_to_id.insert(path, id);
-                    self.inode_to_id.insert(inode, id);
-                    self.id_to_entry.insert(id, entry);
-                }
-                (Some(id), Some(inode_id)) if id == inode_id => {
-                    let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
-                    if entry.action.is_added() || entry.action.is_created() {
-                        // do nothing and it will be removed
-                    } else {
-                        entry.action.merge(REMOVED);
-                        // Reassign to a new (higher) ID so the folder's
-                        // RemoveFolder sorts after its children's Delete
-                        // actions in BTreeMap iteration order.
-                        let new_id = self.get_new_id();
-                        self.path_to_id.insert(path, new_id);
-                        self.inode_to_id.insert(inode, new_id);
-                        self.id_to_entry.insert(new_id, entry);
-                    }
-                }
-                _ => panic!("Impossible case"),
-            }
         }
 
-        // path doesn't change, inode doesnt change
-        fn append_modified(&mut self, path: &'a Path, inode: u64) {
-            let maybe_path_id = self.path_to_id.get(path);
-            let maybe_inode_id = self.inode_to_id.get(&inode);
+        let maybe_path_id = self.path_to_id.get(path);
+        let maybe_inode_id = self.inode_to_id.remove(&from_inode);
 
-            match (maybe_path_id, maybe_inode_id) {
-                (Some(id), Some(inode_id)) if id == inode_id => {
-                    let entry = self.id_to_entry.get_mut(id).expect("id must be present");
-                    entry.action.merge(MODIFIED);
-                }
-                (None, None) => {
-                    let id = self.get_new_id();
-                    let entry = IdEntry {
-                        action: MODIFIED,
-                        is_folder: false,
-                        initial_path: path,
-                        initial_inode: inode,
-                        current_path: path,
-                        current_inode: inode,
-                    };
-
-                    self.id_to_entry.insert(id, entry);
-                    self.path_to_id.insert(path, id);
-                    self.inode_to_id.insert(inode, id);
-                }
-                _ => panic!("Impossible case"),
-            }
-        }
-
-        // path doesn't change, inode changes
-        fn append_modified_with_inode_change(
-            &mut self,
-            path: &'a Path,
-            old_inode: u64,
-            new_inode: u64,
-        ) {
-            let maybe_path_id = self.path_to_id.get(path);
-            let maybe_inode_id = self.inode_to_id.remove(&old_inode);
-
-            match (maybe_path_id, maybe_inode_id) {
-                (Some(id), Some(inode_id)) if *id == inode_id => {
-                    self.inode_to_id.insert(new_inode, inode_id);
-                    let entry = self.id_to_entry.get_mut(id).expect("id must be present");
-                    entry.action.merge(MODIFIED);
-                    entry.current_inode = new_inode;
-                }
-                (None, None) => {
-                    let entry = IdEntry {
-                        action: MODIFIED,
-                        is_folder: false,
-                        initial_path: path,
-                        initial_inode: old_inode,
-                        current_path: path,
-                        current_inode: new_inode,
-                    };
-
-                    let id = self.get_new_id();
-                    self.path_to_id.insert(path, id);
-                    self.inode_to_id.insert(new_inode, id);
-                    self.id_to_entry.insert(id, entry);
-                }
-                _ => panic!("Impossible case"),
-            }
-        }
-
-        fn append_replaced(
-            &mut self,
-            path: &'a Path,
-            from_inode: u64,
-            to_inode: u64,
-            is_folder: bool,
-        ) {
-            // When a folder is replaced, the old contents are gone.
-            // The fs_watcher will send FileAdded/FolderAdded for the new
-            // folder's contents. Remove old children so any that aren't
-            // re-added via FileAdded will produce Delete actions.
-            if is_folder {
-                let tracked_children: Vec<(&'a Path, Id, bool)> = self
-                    .path_to_id
-                    .iter()
-                    .filter(|(p, _)| **p != path && p.parent() == Some(path))
-                    .map(|(p, id)| {
-                        let is_folder = self
-                            .id_to_entry
-                            .get(id)
-                            .map(|e| e.is_folder)
-                            .expect("id must be present");
-                        (*p, *id, is_folder)
-                    })
-                    .collect();
-
-                for (_, id, child_is_folder) in tracked_children {
-                    let entry = self.id_to_entry.get(&id).expect("id must be present");
-                    if child_is_folder {
-                        self.append_removed_folder(entry.current_path, entry.current_inode);
-                    } else {
-                        self.append_removed_file(entry.current_path, entry.current_inode);
-                    }
-                }
-
-                let untracked_children: Vec<(&'a Path, u64, bool)> = self
-                    .initial_state
-                    .direct_children
-                    .get(path)
-                    .map(|dc| {
-                        dc.iter()
-                            .filter(|(p, i)| {
-                                !self.inode_to_id.contains_key(i)
-                                    && !self.path_to_id.contains_key(p.as_path())
-                            })
-                            .map(|(p, i)| {
-                                (p.as_path(), *i, self.initial_state.is_folder(p.as_path()))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                for (child_path, child_inode, child_is_folder) in untracked_children {
-                    if child_is_folder {
-                        self.append_removed_folder(child_path, child_inode);
-                    } else {
-                        self.append_removed_file(child_path, child_inode);
-                    }
-                }
-            }
-
-            let maybe_path_id = self.path_to_id.get(path);
-            let maybe_inode_id = self.inode_to_id.remove(&from_inode);
-
-            match (maybe_path_id, maybe_inode_id) {
-                (None, None) => {
-                    let entry = IdEntry {
-                        action: REPLACED,
-                        is_folder,
-                        initial_path: path,
-                        initial_inode: from_inode,
-                        current_path: path,
-                        current_inode: to_inode,
-                    };
-
-                    let id = self.get_new_id();
-                    self.id_to_entry.insert(id, entry);
-                    self.path_to_id.insert(path, id);
-                    self.inode_to_id.insert(to_inode, id);
-                }
-                (Some(path_id), Some(id)) if *path_id == id => {
-                    let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
-                    entry.action.merge(REPLACED);
-                    entry.current_inode = to_inode;
-                    self.inode_to_id.insert(to_inode, id);
-                }
-                _ => panic!("Impossible case"),
-            }
-        }
-
-        fn append_renamed_folder(&mut self, from_path: &'a Path, to_path: &'a Path, inode: u64) {
-            let maybe_path_id = self.path_to_id.remove(from_path);
-            let maybe_inode_id = self.inode_to_id.get(&inode).copied();
-
-            match (maybe_path_id, maybe_inode_id) {
-                (Some(id), Some(inode_id)) if inode_id == id => {
-                    let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
-                    if entry.initial_path == to_path {
-                        entry.action.remove_flag(RENAMED);
-
-                        if entry.action.has_any_flag() {
-                            entry.current_path = to_path;
-                            self.id_to_entry.insert(id, entry);
-                            self.path_to_id.insert(to_path, id);
-                        } else {
-                            self.inode_to_id.remove(&inode);
-                        }
-                    } else {
-                        entry.current_path = to_path;
-                        entry.action.merge(RENAMED);
-                        self.id_to_entry.insert(id, entry);
-                        self.path_to_id.insert(to_path, id);
-                    }
-                }
-                (None, None) => {
-                    let entry = IdEntry {
-                        action: RENAMED,
-                        is_folder: true,
-                        initial_path: from_path,
-                        initial_inode: inode,
-                        current_path: to_path,
-                        current_inode: inode,
-                    };
-
-                    let id = self.get_new_id();
-                    self.path_to_id.insert(to_path, id);
-                    self.inode_to_id.insert(inode, id);
-                    self.id_to_entry.insert(id, entry);
-                }
-                _ => panic!("Impossible case"),
-            }
-        }
-
-        // inode stays the same, path changes
-        // if path is the same and there is only RENAMED flag, remove from the map
-        fn append_renamed_file(
-            &mut self,
-            from_path: &'a Path,
-            to_path: &'a Path,
-            inode: u64,
-        ) {
-            let maybe_path_id = self.path_to_id.remove(from_path);
-            let maybe_inode_id = self.inode_to_id.get(&inode).copied();
-
-            match (maybe_path_id, maybe_inode_id) {
-                (Some(id), Some(inode_id)) if inode_id == id => {
-                    let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
-                    if entry.initial_path == to_path {
-                        entry.action.remove_flag(RENAMED);
-
-                        if entry.action.has_any_flag() {
-                            entry.current_path = to_path;
-                            self.id_to_entry.insert(id, entry);
-                            self.path_to_id.insert(to_path, id);
-                        } else {
-                            self.inode_to_id.remove(&inode);
-                        }
-                    } else {
-                        entry.current_path = to_path;
-                        entry.action.merge(RENAMED);
-                        self.id_to_entry.insert(id, entry);
-                        self.path_to_id.insert(to_path, id);
-                    }
-                }
-                (None, None) => {
-                    let entry = IdEntry {
-                        action: RENAMED,
-                        is_folder: false,
-                        initial_path: from_path,
-                        initial_inode: inode,
-                        current_path: to_path,
-                        current_inode: inode,
-                    };
-
-                    let id = self.get_new_id();
-                    self.path_to_id.insert(to_path, id);
-                    self.inode_to_id.insert(inode, id);
-                    self.id_to_entry.insert(id, entry);
-                }
-                _ => panic!("Impossible case"),
-            }
-        }
-
-        // it can be move from the folder and then added back with the same name
-        // it can be move from the folder and then added back with different name
-        // if there is a such a path in the
-        // if folder is replaced, all the files of the replaced folder come with Event::FileAdded
-        fn append_added_file(&mut self, path: &'a Path, inode: u64) {
-            let maybe_inode_id = self.inode_to_id.get(&inode);
-            let maybe_path_id = self.path_to_id.get(path);
-
-            match (maybe_path_id, maybe_inode_id) {
-                (None, None) => {
-                    let entry = IdEntry {
-                        action: ADDED,
-                        is_folder: false,
-                        initial_path: path,
-                        initial_inode: inode,
-                        current_path: path,
-                        current_inode: inode,
-                    };
-
-                    let id = self.get_new_id();
-                    self.path_to_id.insert(path, id);
-                    self.inode_to_id.insert(inode, id);
-                    self.id_to_entry.insert(id, entry);
-                }
-                (None, Some(id)) => {
-                    // different name same inode
-                    let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
-                    entry.action.remove_flag(REMOVED);
-                    entry.action.merge(MODIFIED); // file can be modified while it was outside of the watched folder
-                    entry.action.merge(RENAMED);
-
-                    self.path_to_id.remove(entry.current_path);
-                    self.path_to_id.insert(path, *id);
-                    entry.current_path = path;
-                }
-                (Some(id), None) => {
-                    // same path but different inode, treat it as the user modified the same file, but using tmp file
-                    let entry = self.id_to_entry.get_mut(id).expect("id must be present");
-                    self.inode_to_id.remove(&entry.current_inode);
-                    entry.current_inode = inode;
-                    entry.action.remove_flag(REMOVED);
-                    entry.action.merge(MODIFIED);
-                    self.inode_to_id.insert(entry.current_inode, *id);
-                }
-                (Some(id), Some(inode_id)) if id == inode_id => {
-                    // file returned back,
-                    let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
-                    entry.action.remove_flag(REMOVED);
-                    entry.action.merge(MODIFIED);
-                }
-                _ => panic!("Impossible case"),
-            }
-        }
-
-        fn append_added_folder(&mut self, path: &'a Path, inode: u64) {
-            let maybe_inode_id = self.inode_to_id.get(&inode);
-            let maybe_path_id = self.path_to_id.get(path);
-
-            match (maybe_path_id, maybe_inode_id) {
-                (None, None) => {
-                    let entry = IdEntry {
-                        action: ADDED,
-                        is_folder: true,
-                        initial_path: path,
-                        initial_inode: inode,
-                        current_path: path,
-                        current_inode: inode,
-                    };
-
-                    let id = self.get_new_id();
-                    self.path_to_id.insert(path, id);
-                    self.inode_to_id.insert(inode, id);
-                    self.id_to_entry.insert(id, entry);
-                }
-                (None, Some(id)) => {
-                    // Same inode, different path — folder moved
-                    let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
-                    entry.action.remove_flag(REMOVED);
-                    entry.action.merge(RENAMED);
-
-                    self.path_to_id.remove(entry.current_path);
-                    self.path_to_id.insert(path, *id);
-                    entry.current_path = path;
-                }
-                (Some(id), None) => {
-                    // Same path, different inode — folder replaced
-                    let entry = self.id_to_entry.get_mut(id).expect("id must be present");
-                    self.inode_to_id.remove(&entry.current_inode);
-                    entry.current_inode = inode;
-                    entry.action.remove_flag(REMOVED);
-                    entry.action.merge(ADDED);
-                    self.inode_to_id.insert(inode, *id);
-                }
-                (Some(id), Some(inode_id)) if id == inode_id => {
-                    // Same path, same inode — folder returned back
-                    let mut entry = self.id_to_entry.remove(id).expect("id must be present");
-                    entry.action.remove_flag(REMOVED);
-
-                    if entry.action.has_any_flag() {
-                        self.id_to_entry.insert(*id, entry);
-                    } else {
-                        // No flags left — folder came back unchanged, remove tracking
-                        self.path_to_id.remove(path);
-                        self.inode_to_id.remove(&inode);
-                    }
-                }
-                _ => panic!("Impossible case"),
-            }
-        }
-
-        fn append_removed_file(&mut self, path: &'a Path, inode: u64) {
-            let maybe_inode_id = self.inode_to_id.remove(&inode);
-            let maybe_path_id = self.path_to_id.remove(path);
-
-            match (maybe_inode_id, maybe_path_id) {
-                (None, None) => {
-                    let entry = IdEntry {
-                        action: REMOVED,
-                        is_folder: false,
-                        initial_path: path,
-                        initial_inode: inode,
-                        current_path: path,
-                        current_inode: inode,
-                    };
-
-                    let id = self.get_new_id();
-                    self.path_to_id.insert(path, id);
-                    self.inode_to_id.insert(inode, id);
-                    self.id_to_entry.insert(id, entry);
-                }
-                (Some(id), Some(path_id)) if id == path_id => {
-                    let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
-                    if entry.action.is_added() || entry.action.is_created() {
-                        // do nothing and it will be removed
-                    } else {
-                        entry.action.merge(REMOVED);
-                        self.path_to_id.insert(path, id);
-                        self.inode_to_id.insert(inode, id);
-                        self.id_to_entry.insert(id, entry);
-                    }
-                }
-                _ => panic!("Impossible case"),
-            }
-        }
-
-        fn append_created_file(&mut self, path: &'a Path, inode: u64) {
-            let maybe_inode_id = self.inode_to_id.get(&inode);
-            let maybe_path_id = self.path_to_id.get(path);
-
-            match (maybe_path_id, maybe_inode_id) {
-                (None, None) => {
-                    let entry = IdEntry {
-                        action: CREATED,
-                        is_folder: false,
-                        initial_path: path,
-                        initial_inode: inode,
-                        current_path: path,
-                        current_inode: inode,
-                    };
-                    let id = self.get_new_id();
-
-                    self.id_to_entry.insert(id, entry);
-                    self.path_to_id.insert(path, id);
-                    self.inode_to_id.insert(inode, id);
-                }
-                // TODO case when creating a file with the same name, that was already deleted
-                _ => panic!("Impossible case"),
-            }
-        }
-
-        fn append_created_folder(&mut self, path: &'a Path, inode: u64) {
-            let maybe_inode_id = self.inode_to_id.get(&inode);
-            let maybe_path_id = self.path_to_id.get(path);
-
-            match (maybe_path_id, maybe_inode_id) {
-                (None, None) => {
-                    let entry = IdEntry {
-                        action: CREATED,
-                        is_folder: true,
-                        initial_path: path,
-                        initial_inode: inode,
-                        current_path: path,
-                        current_inode: inode,
-                    };
-                    let id = self.get_new_id();
-
-                    self.id_to_entry.insert(id, entry);
-                    self.path_to_id.insert(path, id);
-                    self.inode_to_id.insert(inode, id);
-                }
-                (Some(id), None) => {
-                    let entry = self.id_to_entry.get_mut(id).expect("Id must be present");
-                    entry.action.remove_flag(REMOVED);
-                    entry.action.merge(CREATED);
-                    self.inode_to_id.remove(&entry.current_inode);
-                    entry.current_inode = inode;
-                }
-                _ => panic!("Impossible case"),
-            }
-        }
-
-        fn to_sync_actions(self) -> Vec<SyncAction> {
-            let mut actions = vec![];
-            for entry in self.id_to_entry.into_values() {
-                if entry.is_folder {
-                    // folder specific behavior
-                    if entry.action.has_flag(REMOVED) {
-                        actions.push(SyncAction::RemoveFolder(entry.initial_path.to_path_buf()));
-                        continue;
-                    }
-
-                    if entry.action.has_flag(CREATED) {
-                        actions.push(SyncAction::EnsureFolder(entry.current_path.to_path_buf()));
-                        continue;
-                    }
-
-                    if entry.action.has_flag(ADDED) {
-                        actions.push(SyncAction::EnsureFolder(entry.current_path.to_path_buf()));
-                        continue;
-                    }
-
-                    if entry.action.has_flag(REPLACED) && entry.action.has_flag(RENAMED) {
-                        actions.push(SyncAction::MoveFolder { from: entry.initial_path.to_path_buf(), to: entry.current_path.to_path_buf() });
-                        continue;
-                    }
-
-                    if entry.action.has_flag(REPLACED) {
-                        actions.push(SyncAction::EnsureFolder(entry.current_path.to_path_buf()));
-                        continue;
-                    }
-
-                    if entry.action.has_flag(RENAMED) {
-                        actions.push(SyncAction::MoveFolder { from: entry.initial_path.to_path_buf(), to: entry.current_path.to_path_buf() });
-                        continue;
-                    }
-
-                } else {
-                    if entry.action.has_flag(REMOVED) {
-                        actions.push(SyncAction::Delete(entry.initial_path.to_path_buf()));
-                        continue;
-                    }
-
-                    if entry.action.has_flag(ADDED) {
-                        actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
-                        continue;
-                    }
-
-                    if entry.action.has_flag(CREATED) {
-                        actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
-                        continue;
-                    }
-
-                    if entry.action.has_flag(MODIFIED) && entry.action.has_flag(RENAMED) {
-                        actions.push(SyncAction::MoveAndUpload {
-                            from: entry.initial_path.to_path_buf(),
-                            to: entry.current_path.to_path_buf(),
-                        });
-                        continue;
-                    }
-
-                    if entry.action.has_flag(REPLACED) && entry.action.has_flag(RENAMED) {
-                        actions.push(SyncAction::MoveAndUpload {
-                            from: entry.initial_path.to_path_buf(),
-                            to: entry.current_path.to_path_buf(),
-                        });
-                        continue;
-                    }
-
-                    if entry.action.has_flag(REPLACED) {
-                        actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
-                        continue;
-                    }
-
-                    if entry.action.has_flag(RENAMED) {
-                        actions.push(SyncAction::Move {
-                            from: entry.initial_path.to_path_buf(),
-                            to: entry.current_path.to_path_buf(),
-                        });
-                        continue;
-                    }
-
-                    if entry.action.has_flag(MODIFIED) {
-                        actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
-                        continue;
-                    }
-                }
-            }
-
-            // --- Post-processing for Google Drive semantics ---
-
-            // 1. Folder move is recursive: drop redundant child moves,
-            //    downgrade MoveAndUpload to Upload when the move part is covered.
-            let moved_folders: Vec<(std::path::PathBuf, std::path::PathBuf)> = actions
-                .iter()
-                .filter_map(|a| match a {
-                    SyncAction::MoveFolder { from, to } => Some((from.clone(), to.clone())),
-                    _ => None,
-                })
-                .collect();
-
-            if !moved_folders.is_empty() {
-                let is_covered = |from: &Path, to: &Path, exclude_self: bool| {
-                    moved_folders.iter().any(|(ff, ft)| {
-                        (!exclude_self || from != ff.as_path())
-                            && from.starts_with(ff)
-                            && to.starts_with(ft)
-                            && from.strip_prefix(ff) == to.strip_prefix(ft)
-                    })
+        match (maybe_path_id, maybe_inode_id) {
+            (None, None) => {
+                let entry = IdEntry {
+                    action: REPLACED,
+                    is_folder,
+                    initial_path: path,
+                    initial_inode: from_inode,
+                    current_path: path,
+                    current_inode: to_inode,
                 };
 
-                actions = actions
-                    .into_iter()
-                    .filter_map(|action| match &action {
-                        SyncAction::Move { from, to } if is_covered(from, to, false) => None,
-                        SyncAction::MoveAndUpload { to, from } if is_covered(from, to, false) => {
-                            Some(SyncAction::Upload(to.clone()))
-                        }
-                        SyncAction::MoveFolder { from, to } if is_covered(from, to, true) => None,
-                        _ => Some(action),
-                    })
-                    .collect();
+                let id = self.get_new_id();
+                self.id_to_entry.insert(id, entry);
+                self.path_to_id.insert(path, id);
+                self.inode_to_id.insert(to_inode, id);
             }
-
-            // 2. Folder deletion is recursive: drop redundant child deletions.
-            let removed_folders: Vec<std::path::PathBuf> = actions
-                .iter()
-                .filter_map(|a| match a {
-                    SyncAction::RemoveFolder(p) => Some(p.clone()),
-                    _ => None,
-                })
-                .collect();
-
-            if !removed_folders.is_empty() {
-                actions.retain(|action| {
-                    let path = match action {
-                        SyncAction::Delete(p) | SyncAction::RemoveFolder(p) => p,
-                        _ => return true,
-                    };
-                    !removed_folders.iter().any(|folder| path != folder && path.starts_with(folder))
-                });
+            (Some(path_id), Some(id)) if *path_id == id => {
+                let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
+                entry.action.merge(REPLACED);
+                entry.current_inode = to_inode;
+                self.inode_to_id.insert(to_inode, id);
             }
-
-            // 3. Ensure folder operations precede actions on their children.
-            //    E.g. MoveFolder { f→g } before Upload("g/b.txt"),
-            //    EnsureFolder("g") before Upload("g/x.txt").
-            //    Uses stable sort so unrelated actions keep BTreeMap insertion order.
-            fn folder_dest(action: &SyncAction) -> Option<&Path> {
-                match action {
-                    SyncAction::MoveFolder { to, .. } => Some(to.as_path()),
-                    _ => None,
-                }
-            }
-
-            fn action_path(action: &SyncAction) -> &Path {
-                match action {
-                    SyncAction::Upload(p)
-                    | SyncAction::Delete(p)
-                    | SyncAction::EnsureFolder(p)
-                    | SyncAction::RemoveFolder(p) => p.as_path(),
-                    SyncAction::MoveAndUpload { to, .. }
-                    | SyncAction::Move { to, .. }
-                    | SyncAction::MoveFolder { to, .. } => to.as_path(),
-                }
-            }
-
-            actions.sort_by(|a, b| {
-                use std::cmp::Ordering;
-
-                if let Some(fd) = folder_dest(a) {
-                    let bp = action_path(b);
-                    if bp.starts_with(fd) && bp != fd {
-                        return Ordering::Less;
-                    }
-                }
-                if let Some(fd) = folder_dest(b) {
-                    let ap = action_path(a);
-                    if ap.starts_with(fd) && ap != fd {
-                        return Ordering::Greater;
-                    }
-                }
-                Ordering::Equal
-            });
-
-            actions
+            _ => panic!("Impossible case"),
         }
     }
 
-    type Id = u32;
+    fn append_renamed_folder(&mut self, from_path: &'a Path, to_path: &'a Path, inode: u64) {
+        let maybe_path_id = self.path_to_id.remove(from_path);
+        let maybe_inode_id = self.inode_to_id.get(&inode).copied();
+
+        match (maybe_path_id, maybe_inode_id) {
+            (Some(id), Some(inode_id)) if inode_id == id => {
+                let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
+                if entry.initial_path == to_path {
+                    entry.action.remove_flag(RENAMED);
+
+                    if entry.action.has_any_flag() {
+                        entry.current_path = to_path;
+                        self.id_to_entry.insert(id, entry);
+                        self.path_to_id.insert(to_path, id);
+                    } else {
+                        self.inode_to_id.remove(&inode);
+                    }
+                } else {
+                    entry.current_path = to_path;
+                    entry.action.merge(RENAMED);
+                    self.id_to_entry.insert(id, entry);
+                    self.path_to_id.insert(to_path, id);
+                }
+            }
+            (None, None) => {
+                let entry = IdEntry {
+                    action: RENAMED,
+                    is_folder: true,
+                    initial_path: from_path,
+                    initial_inode: inode,
+                    current_path: to_path,
+                    current_inode: inode,
+                };
+
+                let id = self.get_new_id();
+                self.path_to_id.insert(to_path, id);
+                self.inode_to_id.insert(inode, id);
+                self.id_to_entry.insert(id, entry);
+            }
+            _ => panic!("Impossible case"),
+        }
+    }
+
+    // inode stays the same, path changes
+    // if path is the same and there is only RENAMED flag, remove from the map
+    fn append_renamed_file(&mut self, from_path: &'a Path, to_path: &'a Path, inode: u64) {
+        let maybe_path_id = self.path_to_id.remove(from_path);
+        let maybe_inode_id = self.inode_to_id.get(&inode).copied();
+
+        match (maybe_path_id, maybe_inode_id) {
+            (Some(id), Some(inode_id)) if inode_id == id => {
+                let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
+                if entry.initial_path == to_path {
+                    entry.action.remove_flag(RENAMED);
+
+                    if entry.action.has_any_flag() {
+                        entry.current_path = to_path;
+                        self.id_to_entry.insert(id, entry);
+                        self.path_to_id.insert(to_path, id);
+                    } else {
+                        self.inode_to_id.remove(&inode);
+                    }
+                } else {
+                    entry.current_path = to_path;
+                    entry.action.merge(RENAMED);
+                    self.id_to_entry.insert(id, entry);
+                    self.path_to_id.insert(to_path, id);
+                }
+            }
+            (None, None) => {
+                let entry = IdEntry {
+                    action: RENAMED,
+                    is_folder: false,
+                    initial_path: from_path,
+                    initial_inode: inode,
+                    current_path: to_path,
+                    current_inode: inode,
+                };
+
+                let id = self.get_new_id();
+                self.path_to_id.insert(to_path, id);
+                self.inode_to_id.insert(inode, id);
+                self.id_to_entry.insert(id, entry);
+            }
+            _ => panic!("Impossible case"),
+        }
+    }
+
+    // it can be move from the folder and then added back with the same name
+    // it can be move from the folder and then added back with different name
+    // if there is a such a path in the
+    // if folder is replaced, all the files of the replaced folder come with Event::FileAdded
+    fn append_added_file(&mut self, path: &'a Path, inode: u64) {
+        let maybe_inode_id = self.inode_to_id.get(&inode);
+        let maybe_path_id = self.path_to_id.get(path);
+
+        match (maybe_path_id, maybe_inode_id) {
+            (None, None) => {
+                let entry = IdEntry {
+                    action: ADDED,
+                    is_folder: false,
+                    initial_path: path,
+                    initial_inode: inode,
+                    current_path: path,
+                    current_inode: inode,
+                };
+
+                let id = self.get_new_id();
+                self.path_to_id.insert(path, id);
+                self.inode_to_id.insert(inode, id);
+                self.id_to_entry.insert(id, entry);
+            }
+            (None, Some(id)) => {
+                // different name same inode
+                let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
+                entry.action.remove_flag(REMOVED);
+                entry.action.merge(MODIFIED); // file can be modified while it was outside of the watched folder
+                entry.action.merge(RENAMED);
+
+                self.path_to_id.remove(entry.current_path);
+                self.path_to_id.insert(path, *id);
+                entry.current_path = path;
+            }
+            (Some(id), None) => {
+                // same path but different inode, treat it as the user modified the same file, but using tmp file
+                let entry = self.id_to_entry.get_mut(id).expect("id must be present");
+                self.inode_to_id.remove(&entry.current_inode);
+                entry.current_inode = inode;
+                entry.action.remove_flag(REMOVED);
+                entry.action.merge(MODIFIED);
+                self.inode_to_id.insert(entry.current_inode, *id);
+            }
+            (Some(id), Some(inode_id)) if id == inode_id => {
+                // file returned back,
+                let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
+                entry.action.remove_flag(REMOVED);
+                entry.action.merge(MODIFIED);
+            }
+            _ => panic!("Impossible case"),
+        }
+    }
+
+    fn append_added_folder(&mut self, path: &'a Path, inode: u64) {
+        let maybe_inode_id = self.inode_to_id.get(&inode);
+        let maybe_path_id = self.path_to_id.get(path);
+
+        match (maybe_path_id, maybe_inode_id) {
+            (None, None) => {
+                let entry = IdEntry {
+                    action: ADDED,
+                    is_folder: true,
+                    initial_path: path,
+                    initial_inode: inode,
+                    current_path: path,
+                    current_inode: inode,
+                };
+
+                let id = self.get_new_id();
+                self.path_to_id.insert(path, id);
+                self.inode_to_id.insert(inode, id);
+                self.id_to_entry.insert(id, entry);
+            }
+            (None, Some(id)) => {
+                // Same inode, different path — folder moved
+                let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
+                entry.action.remove_flag(REMOVED);
+                entry.action.merge(RENAMED);
+
+                self.path_to_id.remove(entry.current_path);
+                self.path_to_id.insert(path, *id);
+                entry.current_path = path;
+            }
+            (Some(id), None) => {
+                // Same path, different inode — folder replaced
+                let entry = self.id_to_entry.get_mut(id).expect("id must be present");
+                self.inode_to_id.remove(&entry.current_inode);
+                entry.current_inode = inode;
+                entry.action.remove_flag(REMOVED);
+                entry.action.merge(ADDED);
+                self.inode_to_id.insert(inode, *id);
+            }
+            (Some(id), Some(inode_id)) if id == inode_id => {
+                // Same path, same inode — folder returned back
+                let mut entry = self.id_to_entry.remove(id).expect("id must be present");
+                entry.action.remove_flag(REMOVED);
+
+                if entry.action.has_any_flag() {
+                    self.id_to_entry.insert(*id, entry);
+                } else {
+                    // No flags left — folder came back unchanged, remove tracking
+                    self.path_to_id.remove(path);
+                    self.inode_to_id.remove(&inode);
+                }
+            }
+            _ => panic!("Impossible case"),
+        }
+    }
+
+    fn append_removed_file(&mut self, path: &'a Path, inode: u64) {
+        let maybe_inode_id = self.inode_to_id.remove(&inode);
+        let maybe_path_id = self.path_to_id.remove(path);
+
+        match (maybe_inode_id, maybe_path_id) {
+            (None, None) => {
+                let entry = IdEntry {
+                    action: REMOVED,
+                    is_folder: false,
+                    initial_path: path,
+                    initial_inode: inode,
+                    current_path: path,
+                    current_inode: inode,
+                };
+
+                let id = self.get_new_id();
+                self.path_to_id.insert(path, id);
+                self.inode_to_id.insert(inode, id);
+                self.id_to_entry.insert(id, entry);
+            }
+            (Some(id), Some(path_id)) if id == path_id => {
+                let mut entry = self.id_to_entry.remove(&id).expect("id must be present");
+                if entry.action.is_added() || entry.action.is_created() {
+                    // do nothing and it will be removed
+                } else {
+                    entry.action.merge(REMOVED);
+                    self.path_to_id.insert(path, id);
+                    self.inode_to_id.insert(inode, id);
+                    self.id_to_entry.insert(id, entry);
+                }
+            }
+            _ => panic!("Impossible case"),
+        }
+    }
+
+    fn append_created_file(&mut self, path: &'a Path, inode: u64) {
+        let maybe_inode_id = self.inode_to_id.get(&inode);
+        let maybe_path_id = self.path_to_id.get(path);
+
+        match (maybe_path_id, maybe_inode_id) {
+            (None, None) => {
+                let entry = IdEntry {
+                    action: CREATED,
+                    is_folder: false,
+                    initial_path: path,
+                    initial_inode: inode,
+                    current_path: path,
+                    current_inode: inode,
+                };
+                let id = self.get_new_id();
+
+                self.id_to_entry.insert(id, entry);
+                self.path_to_id.insert(path, id);
+                self.inode_to_id.insert(inode, id);
+            }
+            // TODO case when creating a file with the same name, that was already deleted
+            _ => panic!("Impossible case"),
+        }
+    }
+
+    fn append_created_folder(&mut self, path: &'a Path, inode: u64) {
+        let maybe_inode_id = self.inode_to_id.get(&inode);
+        let maybe_path_id = self.path_to_id.get(path);
+
+        match (maybe_path_id, maybe_inode_id) {
+            (None, None) => {
+                let entry = IdEntry {
+                    action: CREATED,
+                    is_folder: true,
+                    initial_path: path,
+                    initial_inode: inode,
+                    current_path: path,
+                    current_inode: inode,
+                };
+                let id = self.get_new_id();
+
+                self.id_to_entry.insert(id, entry);
+                self.path_to_id.insert(path, id);
+                self.inode_to_id.insert(inode, id);
+            }
+            (Some(id), None) => {
+                let entry = self.id_to_entry.get_mut(id).expect("Id must be present");
+                entry.action.remove_flag(REMOVED);
+                entry.action.merge(CREATED);
+                self.inode_to_id.remove(&entry.current_inode);
+                entry.current_inode = inode;
+            }
+            _ => panic!("Impossible case"),
+        }
+    }
+
+    pub(crate) fn to_sync_actions(self) -> Vec<SyncAction> {
+        let mut actions = vec![];
+        for entry in self.id_to_entry.into_values() {
+            if entry.is_folder {
+                // folder specific behavior
+                if entry.action.has_flag(REMOVED) {
+                    actions.push(SyncAction::RemoveFolder(entry.initial_path.to_path_buf()));
+                    continue;
+                }
+
+                if entry.action.has_flag(CREATED) {
+                    actions.push(SyncAction::EnsureFolder(entry.current_path.to_path_buf()));
+                    continue;
+                }
+
+                if entry.action.has_flag(ADDED) {
+                    actions.push(SyncAction::EnsureFolder(entry.current_path.to_path_buf()));
+                    continue;
+                }
+
+                if entry.action.has_flag(REPLACED) && entry.action.has_flag(RENAMED) {
+                    actions.push(SyncAction::MoveFolder {
+                        from: entry.initial_path.to_path_buf(),
+                        to: entry.current_path.to_path_buf(),
+                    });
+                    continue;
+                }
+
+                if entry.action.has_flag(REPLACED) {
+                    actions.push(SyncAction::EnsureFolder(entry.current_path.to_path_buf()));
+                    continue;
+                }
+
+                if entry.action.has_flag(RENAMED) {
+                    actions.push(SyncAction::MoveFolder {
+                        from: entry.initial_path.to_path_buf(),
+                        to: entry.current_path.to_path_buf(),
+                    });
+                    continue;
+                }
+            } else {
+                if entry.action.has_flag(REMOVED) {
+                    actions.push(SyncAction::Delete(entry.initial_path.to_path_buf()));
+                    continue;
+                }
+
+                if entry.action.has_flag(ADDED) {
+                    actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
+                    continue;
+                }
+
+                if entry.action.has_flag(CREATED) {
+                    actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
+                    continue;
+                }
+
+                if entry.action.has_flag(MODIFIED) && entry.action.has_flag(RENAMED) {
+                    actions.push(SyncAction::MoveAndUpload {
+                        from: entry.initial_path.to_path_buf(),
+                        to: entry.current_path.to_path_buf(),
+                    });
+                    continue;
+                }
+
+                if entry.action.has_flag(REPLACED) && entry.action.has_flag(RENAMED) {
+                    actions.push(SyncAction::MoveAndUpload {
+                        from: entry.initial_path.to_path_buf(),
+                        to: entry.current_path.to_path_buf(),
+                    });
+                    continue;
+                }
+
+                if entry.action.has_flag(REPLACED) {
+                    actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
+                    continue;
+                }
+
+                if entry.action.has_flag(RENAMED) {
+                    actions.push(SyncAction::Move {
+                        from: entry.initial_path.to_path_buf(),
+                        to: entry.current_path.to_path_buf(),
+                    });
+                    continue;
+                }
+
+                if entry.action.has_flag(MODIFIED) {
+                    actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
+                    continue;
+                }
+            }
+        }
+
+        // --- Post-processing for Google Drive semantics ---
+
+        // 1. Folder move is recursive: drop redundant child moves,
+        //    downgrade MoveAndUpload to Upload when the move part is covered.
+        let moved_folders: Vec<(std::path::PathBuf, std::path::PathBuf)> = actions
+            .iter()
+            .filter_map(|a| match a {
+                SyncAction::MoveFolder { from, to } => Some((from.clone(), to.clone())),
+                _ => None,
+            })
+            .collect();
+
+        if !moved_folders.is_empty() {
+            let is_covered = |from: &Path, to: &Path, exclude_self: bool| {
+                moved_folders.iter().any(|(ff, ft)| {
+                    (!exclude_self || from != ff.as_path())
+                        && from.starts_with(ff)
+                        && to.starts_with(ft)
+                        && from.strip_prefix(ff) == to.strip_prefix(ft)
+                })
+            };
+
+            actions = actions
+                .into_iter()
+                .filter_map(|action| match &action {
+                    SyncAction::Move { from, to } if is_covered(from, to, false) => None,
+                    SyncAction::MoveAndUpload { to, from } if is_covered(from, to, false) => {
+                        Some(SyncAction::Upload(to.clone()))
+                    }
+                    SyncAction::MoveFolder { from, to } if is_covered(from, to, true) => None,
+                    _ => Some(action),
+                })
+                .collect();
+        }
+
+        // 2. Folder deletion is recursive: drop redundant child deletions.
+        let removed_folders: Vec<std::path::PathBuf> = actions
+            .iter()
+            .filter_map(|a| match a {
+                SyncAction::RemoveFolder(p) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+
+        if !removed_folders.is_empty() {
+            actions.retain(|action| {
+                let path = match action {
+                    SyncAction::Delete(p) | SyncAction::RemoveFolder(p) => p,
+                    _ => return true,
+                };
+                !removed_folders
+                    .iter()
+                    .any(|folder| path != folder && path.starts_with(folder))
+            });
+        }
+
+        // 3. Ensure folder operations precede actions on their children.
+        //    E.g. MoveFolder { f→g } before Upload("g/b.txt"),
+        //    EnsureFolder("g") before Upload("g/x.txt").
+        //    Uses stable sort so unrelated actions keep BTreeMap insertion order.
+        fn folder_dest(action: &SyncAction) -> Option<&Path> {
+            match action {
+                SyncAction::MoveFolder { to, .. } => Some(to.as_path()),
+                _ => None,
+            }
+        }
+
+        fn action_path(action: &SyncAction) -> &Path {
+            match action {
+                SyncAction::Upload(p)
+                | SyncAction::Delete(p)
+                | SyncAction::EnsureFolder(p)
+                | SyncAction::RemoveFolder(p) => p.as_path(),
+                SyncAction::MoveAndUpload { to, .. }
+                | SyncAction::Move { to, .. }
+                | SyncAction::MoveFolder { to, .. } => to.as_path(),
+            }
+        }
+
+        actions.sort_by(|a, b| {
+            use std::cmp::Ordering;
+
+            if let Some(fd) = folder_dest(a) {
+                let bp = action_path(b);
+                if bp.starts_with(fd) && bp != fd {
+                    return Ordering::Less;
+                }
+            }
+            if let Some(fd) = folder_dest(b) {
+                let ap = action_path(a);
+                if ap.starts_with(fd) && ap != fd {
+                    return Ordering::Greater;
+                }
+            }
+            Ordering::Equal
+        });
+
+        actions
+    }
+}
+
+type Id = u32;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -946,14 +941,11 @@ mod tests {
         for e in events.iter() {
             println!("{:?}", events_processer.id_to_entry);
             events_processer.append_event(e);
-
         }
 
         let result = events_processer.to_sync_actions();
         assert_eq!(result, expected);
     }
-
-
 
     #[rstest]
     #[case::renamed_then_removed(
