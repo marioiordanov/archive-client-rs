@@ -414,32 +414,6 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
         }
 
         fn append_renamed_folder(&mut self, from_path: &'a Path, to_path: &'a Path, inode: u64) {
-            // If this subfolder rename is covered by a parent folder rename
-            // (same relative path under old→new), skip it — MoveFolder covers it.
-            // Reassign the entry to a new (higher) ID so it sorts after the
-            // parent MoveFolder action in BTreeMap iteration order.
-            if let Some(last_entry) = self.id_to_entry.get(&self.last_id) {
-                if last_entry.is_folder && last_entry.action.has_flag(RENAMED) {
-                    if let (Ok(rel_from), Ok(rel_to)) = (
-                        from_path.strip_prefix(last_entry.initial_path),
-                        to_path.strip_prefix(last_entry.current_path),
-                    ) {
-                        if rel_from == rel_to {
-                            if let Some(old_id) = self.path_to_id.remove(from_path) {
-                                let mut entry = self.id_to_entry.remove(&old_id)
-                                    .expect("id must be present");
-                                entry.current_path = to_path;
-                                let new_id = self.get_new_id();
-                                self.path_to_id.insert(to_path, new_id);
-                                self.inode_to_id.insert(entry.current_inode, new_id);
-                                self.id_to_entry.insert(new_id, entry);
-                            }
-                            return;
-                        }
-                    }
-                }
-            }
-
             let maybe_path_id = self.path_to_id.remove(from_path);
             let maybe_inode_id = self.inode_to_id.get(&inode).copied();
 
@@ -490,33 +464,6 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
             to_path: &'a Path,
             inode: u64,
         ) {
-            // If the last entry is a renamed folder and this file rename has
-            // the same relative path under old→new folder, it's just a
-            // consequence of the folder rename — skip adding RENAMED.
-            // Reassign the entry to a new (higher) ID so it sorts after the
-            // parent MoveFolder action in BTreeMap iteration order.
-            if let Some(last_entry) = self.id_to_entry.get(&self.last_id) {
-                if last_entry.is_folder && last_entry.action.has_flag(RENAMED) {
-                    if let (Ok(rel_from), Ok(rel_to)) = (
-                        from_path.strip_prefix(last_entry.initial_path),
-                        to_path.strip_prefix(last_entry.current_path),
-                    ) {
-                        if rel_from == rel_to {
-                            if let Some(old_id) = self.path_to_id.remove(from_path) {
-                                let mut entry = self.id_to_entry.remove(&old_id)
-                                    .expect("id must be present");
-                                entry.current_path = to_path;
-                                let new_id = self.get_new_id();
-                                self.path_to_id.insert(to_path, new_id);
-                                self.inode_to_id.insert(entry.current_inode, new_id);
-                                self.id_to_entry.insert(new_id, entry);
-                            }
-                            return;
-                        }
-                    }
-                }
-            }
-
             let maybe_path_id = self.path_to_id.remove(from_path);
             let maybe_inode_id = self.inode_to_id.get(&inode).copied();
 
@@ -844,6 +791,112 @@ use crate::app::{fs_index::FsIndex, message::SyncAction};
                         actions.push(SyncAction::Upload(entry.current_path.to_path_buf()));
                         continue;
                     }
+                }
+            }
+
+            // Google Drive folder move is recursive — child Move/MoveAndUpload
+            // actions that mirror the parent MoveFolder are redundant.
+            // If the child also has modifications, downgrade to Upload.
+            let moved_folders: Vec<(std::path::PathBuf, std::path::PathBuf)> = actions
+                .iter()
+                .filter_map(|a| match a {
+                    SyncAction::MoveFolder { from, to } => Some((from.clone(), to.clone())),
+                    _ => None,
+                })
+                .collect();
+
+            if !moved_folders.is_empty() {
+                let mut new_actions = Vec::with_capacity(actions.len());
+                for action in actions {
+                    match &action {
+                        SyncAction::Move { from, to } => {
+                            if moved_folders.iter().any(|(ff, ft)| {
+                                from.starts_with(ff)
+                                    && to.starts_with(ft)
+                                    && from.strip_prefix(ff) == to.strip_prefix(ft)
+                            }) {
+                                // pure rename covered by parent MoveFolder — drop
+                                continue;
+                            }
+                            new_actions.push(action);
+                        }
+                        SyncAction::MoveAndUpload { from, to } => {
+                            if moved_folders.iter().any(|(ff, ft)| {
+                                from.starts_with(ff)
+                                    && to.starts_with(ft)
+                                    && from.strip_prefix(ff) == to.strip_prefix(ft)
+                            }) {
+                                // move covered by parent — keep only the upload
+                                new_actions.push(SyncAction::Upload(to.clone()));
+                                continue;
+                            }
+                            new_actions.push(action);
+                        }
+                        SyncAction::MoveFolder { from, to } => {
+                            if moved_folders.iter().any(|(ff, ft)| {
+                                from != ff
+                                    && from.starts_with(ff)
+                                    && to.starts_with(ft)
+                                    && from.strip_prefix(ff) == to.strip_prefix(ft)
+                            }) {
+                                // subfolder move covered by parent MoveFolder — drop
+                                continue;
+                            }
+                            new_actions.push(action);
+                        }
+                        _ => new_actions.push(action),
+                    }
+                }
+                actions = new_actions;
+            }
+
+            // Ensure MoveFolder actions precede any child actions that reference
+            // paths under the destination folder. E.g. MoveFolder { f→g } must
+            // come before Upload("g/b.txt") because the folder must exist at the
+            // new path before we can upload into it.
+            {
+                let mf_dests: Vec<(std::path::PathBuf, std::path::PathBuf)> = actions
+                    .iter()
+                    .filter_map(|a| match a {
+                        SyncAction::MoveFolder { from, to } => Some((from.clone(), to.clone())),
+                        _ => None,
+                    })
+                    .collect();
+
+                if !mf_dests.is_empty() {
+                    let mut result = Vec::with_capacity(actions.len());
+                    let mut buffered: Vec<Vec<SyncAction>> = vec![Vec::new(); mf_dests.len()];
+                    let mut seen: Vec<bool> = vec![false; mf_dests.len()];
+
+                    for action in actions {
+                        if let SyncAction::MoveFolder { ref from, ref to } = action {
+                            if let Some(i) = mf_dests.iter().position(|(f, t)| f == from && t == to) {
+                                seen[i] = true;
+                                result.push(action);
+                                result.extend(buffered[i].drain(..));
+                                continue;
+                            }
+                        }
+
+                        let target = match &action {
+                            SyncAction::Upload(p) | SyncAction::Delete(p)
+                            | SyncAction::EnsureFolder(p) | SyncAction::RemoveFolder(p) => p.as_path(),
+                            SyncAction::MoveAndUpload { to, .. }
+                            | SyncAction::Move { to, .. }
+                            | SyncAction::MoveFolder { to, .. } => to.as_path(),
+                        };
+
+                        match mf_dests.iter().position(|(_, to)| target.starts_with(to)) {
+                            Some(i) if !seen[i] => buffered[i].push(action),
+                            _ => result.push(action),
+                        }
+                    }
+
+                    for buf in buffered {
+                        result.extend(buf);
+                    }
+
+                    actions = result;
                 }
             }
 
@@ -2197,8 +2250,8 @@ mod tests {
             Event::FileAdded("g/b.txt".into(), 4),
         ],
         vec![
-            SyncAction::MoveAndUpload { from: path_buf("f/b.txt"), to: path_buf("g/b.txt") },
             SyncAction::MoveFolder { from: path_buf("f"), to: path_buf("g") },
+            SyncAction::Upload(path_buf("g/b.txt")),
         ]
     )]
     #[case::new_folder_created_with_nested_folder(
