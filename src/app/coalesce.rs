@@ -1931,6 +1931,11 @@ mod tests {
                 to: "g".into(),
                 inode: 3,
             },
+            Event::FileRenamed {
+                from: "f/b.txt".into(),
+                to: "g/b.txt".into(),
+                inode: 4
+            },
             Event::FileModified("g/b.txt".into(), 4, 4),
         ],
         vec![
@@ -1945,10 +1950,20 @@ mod tests {
                 to: "g".into(),
                 inode: 3,
             },
+            Event::FileRenamed {
+                from: "f/b.txt".into(),
+                to: "g/b.txt".into(),
+                inode: 4
+            },
             Event::FolderRenamed {
                 from: "g".into(),
                 to: "f".into(),
                 inode: 3,
+            },
+            Event::FileRenamed {
+                from: "g/b.txt".into(),
+                to: "f/b.txt".into(),
+                inode: 4
             },
         ],
         vec![]
@@ -1978,10 +1993,20 @@ mod tests {
                 to: "g".into(),
                 inode: 3,
             },
+            Event::FileRenamed {
+                from: "f/b.txt".into(),
+                to: "g/b.txt".into(),
+                inode: 4
+            },
             Event::FolderRenamed {
                 from: "g".into(),
                 to: "h".into(),
                 inode: 3,
+            },
+            Event::FileRenamed {
+                from: "g/b.txt".into(),
+                to: "h/b.txt".into(),
+                inode: 4
             },
         ],
         vec![SyncAction::MoveFolder { from: path_buf("f"), to: path_buf("h") }]
@@ -2191,10 +2216,15 @@ mod tests {
                 to: "g".into(),
                 inode: 3,
             },
+            Event::FileRenamed {
+                from: "f/b.txt".into(),
+                to: "g/b.txt".into(),
+                inode: 40
+            },
         ],
         vec![
-            SyncAction::Upload(path_buf("f/b.txt")),
             SyncAction::MoveFolder { from: path_buf("f"), to: path_buf("g") },
+            SyncAction::Upload(path_buf("g/b.txt")),
         ]
     )]
     #[case::folder_removed_then_added_at_different_path_same_inode(
