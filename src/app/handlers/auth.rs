@@ -100,9 +100,7 @@ fn on_access_token_received_ok(
         services::local_storage::ObjectType::UserProfile,
     );
 
-    state.user_state = UserState::SignedIn {
-        user_data: user_profile.clone().into(),
-    };
+    state.user_state.sign_in( user_profile.clone().into());
 
     state.session.user = user_profile;
     state.session.auth = app::state::AuthState::SignedIn;

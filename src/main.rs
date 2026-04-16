@@ -71,51 +71,47 @@ enum UserState {
 }
 
 impl UserState {
-    pub(crate) fn sign_in(self, user_data: UserData) -> Self {
+    pub(crate) fn sign_in(&mut self, user_data: UserData) {
         if let UserState::SignedOut = self {
-            UserState::SignedIn { user_data }
+            *self = UserState::SignedIn { user_data }
         } else {
             warn!("impossible to sign in from {}", self);
-            self
         }
     }
 
-    pub(crate) fn org_create(self, org_id: String) -> Self {
+    pub(crate) fn org_create(&mut self, org_id: String) {
         if let UserState::SignedIn { user_data } = self {
-            UserState::OrgCreated { org_id, user_data }
+            *self = UserState::OrgCreated { org_id, user_data: user_data.clone() }
         } else {
             warn!("impossible to create org from {}", self);
-            self
         }
     }
 
-    pub(crate) fn org_joined(self, root_folder_id: String) -> Self {
+    pub(crate) fn org_joined(&mut self, root_folder_id: String) {
         if let UserState::SignedIn { user_data } = self {
-            UserState::OrgJoined {
+            *self = UserState::OrgJoined {
                 root_folder_id: Some(root_folder_id),
-                user_data,
-            }
+                user_data: user_data.clone(),
+            };
         } else {
             warn!("impossible to join org from {}", self);
-            self
         }
     }
 
-    pub(crate) fn org_synced(self, resolver: Resolver, root_dir: PathBuf) -> Self {
+    pub(crate) fn org_synced(&mut self, resolver: Resolver, root_dir: PathBuf) {
         if let UserState::OrgJoined {
             user_data,
             root_folder_id: Some(root_folder_id),
         } = self
         {
-            UserState::OrgSynced {
+            *self = UserState::OrgSynced {
                 resolver,
-                root_folder_id,
+                root_folder_id: root_folder_id.clone(),
                 root_dir,
-                user_data,
-            }
+                user_data: user_data.clone(),
+            };
         } else {
             warn!("impossible to sync org from {}", self);
-            self
         }
     }
 }

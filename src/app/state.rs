@@ -116,6 +116,7 @@ pub struct UserProfile {
     pub role: Option<Role>,
 }
 
+#[derive(Clone)]
 pub struct UserData {
     pub email: String,
     pub access_token: String,
