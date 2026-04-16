@@ -1,7 +1,9 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
-use iced::{Element, Subscription, Task};
+use iced::{Element, Subscription, Task, advanced::graphics::futures::subscription, time};
 use lazy_static::lazy_static;
+use log::warn;
+use url::Url;
 
 mod app;
 mod constants;
@@ -12,9 +14,9 @@ mod ui_error;
 use crate::{
     app::{
         message::Message,
-        state::{AppState, Intent, OrgState, Role, Screen, SessionState, UserProfile},
+        state::{AppState, Intent, OrgState, Role, Screen, SessionState, UserData, UserProfile},
     },
-    services::local_storage::LocalStorageService,
+    services::{file_index::FileIndex, local_storage::LocalStorageService, resolver::Resolver},
 };
 
 lazy_static! {
@@ -41,6 +43,95 @@ fn main() -> iced::Result {
 struct ArchiveClient {
     app: AppState,
     screen: Screen,
+}
+
+//                             /-> OrgCreated (owner)
+// FLOWS: SignedOut->Signedin /
+//                            \
+//                             \-> OrgJoined -> OrgSynced (user)
+enum UserState {
+    SignedOut,
+    SignedIn {
+        user_data: UserData,
+    },
+    OrgCreated {
+        org_id: String,
+        user_data: UserData,
+    },
+    OrgJoined {
+        root_folder_id: Option<String>,
+        user_data: UserData,
+    },
+    OrgSynced {
+        resolver: Resolver,
+        root_folder_id: String,
+        root_dir: PathBuf,
+        user_data: UserData,
+    },
+}
+
+impl UserState {
+    pub(crate) fn sign_in(self, user_data: UserData) -> Self {
+        if let UserState::SignedOut = self {
+            UserState::SignedIn { user_data }
+        } else {
+            warn!("impossible to sign in from {}", self);
+            self
+        }
+    }
+
+    pub(crate) fn org_create(self, org_id: String) -> Self {
+        if let UserState::SignedIn { user_data } = self {
+            UserState::OrgCreated { org_id, user_data }
+        } else {
+            warn!("impossible to create org from {}", self);
+            self
+        }
+    }
+
+    pub(crate) fn org_joined(self, root_folder_id: String) -> Self {
+        if let UserState::SignedIn { user_data } = self {
+            UserState::OrgJoined {
+                root_folder_id: Some(root_folder_id),
+                user_data,
+            }
+        } else {
+            warn!("impossible to join org from {}", self);
+            self
+        }
+    }
+
+    pub(crate) fn org_synced(self, resolver: Resolver, root_dir: PathBuf) -> Self {
+        if let UserState::OrgJoined {
+            user_data,
+            root_folder_id: Some(root_folder_id),
+        } = self
+        {
+            UserState::OrgSynced {
+                resolver,
+                root_folder_id,
+                root_dir,
+                user_data,
+            }
+        } else {
+            warn!("impossible to sync org from {}", self);
+            self
+        }
+    }
+}
+
+impl std::fmt::Display for UserState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            UserState::SignedOut => "Signed out",
+            UserState::SignedIn { .. } => "Signed in",
+            UserState::OrgCreated { .. } => "Owner org created",
+            UserState::OrgJoined { .. } => "User joined org",
+            UserState::OrgSynced { .. } => "User org synced",
+        };
+
+        f.write_str(str)
+    }
 }
 
 impl ArchiveClient {
@@ -106,9 +197,16 @@ impl ArchiveClient {
                         );
                         let org_id = org.config.archive_folder_id.clone();
                         let state = AppState {
+                            retry_intent: Some(Intent::LoadDashboard {
+                                org_id: org_id.clone(),
+                            }),
+                            user_state: UserState::OrgCreated {
+                                org_id: org_id,
+                                user_data: session.user.clone().into(),
+                            },
                             session,
                             org,
-                            retry_intent: Some(Intent::LoadDashboard { org_id }),
+                            index: FileIndex::default(),
                         };
 
                         (state, screen, next_task)
@@ -116,16 +214,22 @@ impl ArchiveClient {
                     Some(Role::User) => {
                         let mapped = org.config.local_folder_path.clone();
                         let screen = app::state::Screen::OrgSync(
-                            screens::org_sync::OrgSyncScreen::new(mapped),
+                            screens::org_sync::OrgSyncScreen::new(mapped.clone()),
                         );
 
                         let state = AppState {
+                            user_state: UserState::OrgJoined {
+                                root_folder_id: mapped,
+                                user_data: session.user.clone().into(),
+                            },
                             session,
                             org,
                             retry_intent: None,
+                            index: FileIndex::load(),
                         };
+                        let next_task = Task::none(); // initial_sync. If nothing in the directory, then create folder structure and upload files
 
-                        (state, screen, Task::none())
+                        (state, screen, next_task)
                     }
                     None => {
                         // Should be unreachable due to inference above.
@@ -144,18 +248,24 @@ impl ArchiveClient {
                 );
 
                 let state = AppState {
+                    user_state: UserState::SignedIn {
+                        user_data: session.user.clone().into(),
+                    },
                     session,
                     org,
                     retry_intent: Some(Intent::FetchInvitations),
+                    index: FileIndex::default(),
                 };
 
                 (state, screen, next_task)
             }
             (false, false) => (
                 AppState {
+                    user_state: UserState::SignedOut,
                     session,
                     org,
                     retry_intent: None,
+                    index: FileIndex::default(),
                 },
                 app::state::Screen::SignIn(screens::signin::SignInScreen::default()),
                 Task::none(),
@@ -163,7 +273,23 @@ impl ArchiveClient {
             (false, true) => panic!("Impossible"),
         };
 
-        (Self { app: state, screen }, next_task)
+        let open_revision_task = parse_open_revision_request().map(|request| {
+            ArchiveClient::open_revision_task(
+                state.org.config.archive_folder_id.clone(),
+                state.session.user.access_token.clone(),
+                state.org.config.local_folder_path.clone(),
+                request.local_path,
+                request.revision_id,
+            )
+        });
+
+        let task = if let Some(task) = open_revision_task {
+            Task::batch(vec![next_task, task])
+        } else {
+            next_task
+        };
+
+        (Self { app: state, screen }, task)
     }
 
     // update the UI
@@ -188,14 +314,48 @@ impl ArchiveClient {
 
     fn subscription(&self) -> Subscription<Message> {
         match &self.screen {
-            Screen::OrgSync(screen) if screen.watching => {
+            Screen::OrgSync(screen) if self.app.is_org_ready() && screen.watching => {
                 let Some(mapped) = self.app.org.config.local_folder_path.as_ref() else {
                     return Subscription::none();
                 };
-
                 crate::app::subscriptions::fs_watch_subscription(PathBuf::from(mapped))
             }
             _ => Subscription::none(),
         }
     }
+}
+
+struct OpenRevisionRequest {
+    local_path: String,
+    revision_id: String,
+}
+
+fn parse_open_revision_request() -> Option<OpenRevisionRequest> {
+    for arg in std::env::args() {
+        if !arg.starts_with("archiveclient://") {
+            continue;
+        }
+
+        let url = Url::parse(&arg).ok()?;
+        if url.scheme() != "archiveclient" {
+            continue;
+        }
+
+        let is_open = url.host_str() == Some("open") || url.path() == "/open";
+        if !is_open {
+            continue;
+        }
+
+        let params: std::collections::HashMap<String, String> =
+            url.query_pairs().into_owned().collect();
+        let local_path = params.get("path")?.to_string();
+        let revision_id = params.get("revision")?.to_string();
+
+        return Some(OpenRevisionRequest {
+            local_path,
+            revision_id,
+        });
+    }
+
+    None
 }

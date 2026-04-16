@@ -1,8 +1,13 @@
 use core::fmt;
+use std::{collections::HashMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::screens::{self};
+use crate::{
+    UserState,
+    screens::{self},
+    services::file_index::FileIndex,
+};
 pub enum Screen {
     SignIn(screens::signin::SignInScreen),
     OrgSelection(screens::org_selection::OrgSelectionScreen),
@@ -33,12 +38,19 @@ pub enum Intent {
     LoadDashboard {
         org_id: String,
     },
+    InitialSync {
+        root_dir: PathBuf,
+        root_dir_id: String,
+        progress: HashMap<PathBuf, String>,
+    },
 }
 
 pub struct AppState {
     pub(crate) session: SessionState,
     pub(crate) org: OrgState,
+    pub(crate) index: FileIndex,
 
+    pub(crate) user_state: UserState,
     pub retry_intent: Option<Intent>,
 }
 
@@ -47,11 +59,28 @@ impl AppState {
         self.session.auth == AuthState::SignedIn
     }
 
-    pub fn is_org_created(&self) -> bool {
+    pub fn is_org_ready(&self) -> bool {
         self.org.status == OrgStatus::Ready
     }
+
+    pub fn is_org_created(&self) -> bool {
+        self.org.status == OrgStatus::Created
+    }
+
     pub fn get_org_id(&self) -> &str {
         &self.org.config.archive_folder_id
+    }
+
+    pub fn get_access_token(&self) -> &str {
+        &self.session.user.access_token
+    }
+
+    pub fn get_local_folder(&self) -> Option<PathBuf> {
+        self.org
+            .config
+            .local_folder_path
+            .as_ref()
+            .map(|v| PathBuf::from(v))
     }
 }
 
@@ -87,6 +116,22 @@ pub struct UserProfile {
     pub role: Option<Role>,
 }
 
+pub struct UserData {
+    pub email: String,
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
+impl From<UserProfile> for UserData {
+    fn from(value: UserProfile) -> Self {
+        Self {
+            email: value.email,
+            access_token: value.access_token,
+            refresh_token: value.refresh_token,
+        }
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OrgState {
@@ -108,6 +153,7 @@ pub struct OrgConfig {
 pub enum OrgStatus {
     #[default]
     Unknown,
+    Created,
     Loading,
     Ready,
 }

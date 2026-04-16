@@ -39,8 +39,8 @@ pub enum Message {
         error: String,
     },
     AddRow {
-        row: DashboardRow
-    }
+        row: DashboardRow,
+    },
 }
 
 impl Into<ScreenMessage> for Message {

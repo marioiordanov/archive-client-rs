@@ -9,7 +9,7 @@ use crate::app::coalesce;
 use crate::app::fs_index::FsIndex;
 use crate::app::message::{Message, SyncMessage};
 
-const ARCHIVE_WINDOW: Duration = Duration::from_secs(5*60); // 15 minutes
+const ARCHIVE_WINDOW: Duration = Duration::from_secs(1 * 60); // 15 minutes
 const MAX_ARCHIVE_WINDOW: Duration = Duration::from_secs(3600 * 2);
 
 pub fn fs_watch_subscription(root: PathBuf) -> Subscription<Message> {
@@ -57,7 +57,7 @@ fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Mes
                     }
                     _ = interval.tick() => {
                         if batch.is_empty() {
-
+                            println!("batch is empty increase archive window");
                             current_period *= 2;
                             if current_period > MAX_ARCHIVE_WINDOW {
                                 current_period = MAX_ARCHIVE_WINDOW;
@@ -76,6 +76,7 @@ fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Mes
                             events_processer.append_event(&e);
                         }
                         let actions = events_processer.to_sync_actions();
+                        batch.clear();
 
                         if actions.is_empty() {
                             continue;

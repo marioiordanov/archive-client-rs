@@ -54,6 +54,7 @@ impl<TRequest: Serialize> HttpService<TRequest> {
             "post" => HTTP.post(self.url),
             "put" => HTTP.put(self.url),
             "delete" => HTTP.delete(self.url),
+            "patch" => HTTP.patch(self.url),
             unimplemented_method => unimplemented!("{unimplemented_method}"),
         };
 
@@ -61,19 +62,38 @@ impl<TRequest: Serialize> HttpService<TRequest> {
             request = request.bearer_auth(token);
         }
 
-        request = if let Some(json_request) = self.json_body {
-            request.json(&json_request)
-        } else {
-            let mut body = url::form_urlencoded::Serializer::new(String::new());
-            for (key, value) in self.form_data.iter() {
-                body.append_pair(key, value);
-            }
+        let has_form_data = !self.form_data.is_empty();
 
-            request = request.header(CONTENT_TYPE, "application/x-www-form-urlencoded");
-            request.body(body.finish())
+        request = match (self.json_body, has_form_data) {
+            (None, false) => request,
+            (Some(json_request), false) => request.json(&json_request),
+            (None, true) => {
+                let mut body = url::form_urlencoded::Serializer::new(String::new());
+                for (key, value) in self.form_data.iter() {
+                    body.append_pair(key, value);
+                }
+
+                request = request.header(CONTENT_TYPE, "application/x-www-form-urlencoded");
+                request.body(body.finish())
+            }
+            _ => {
+                unimplemented!()
+            }
         };
 
         request
+    }
+
+    pub async fn put<TResponse: DeserializeOwned, TError: From<reqwest::Error>>(
+        self,
+    ) -> Result<TResponse, TError> {
+        self.send::<TResponse, TError>("put").await
+    }
+
+    pub async fn patch<TResponse: DeserializeOwned, TError: From<reqwest::Error>>(
+        self,
+    ) -> Result<TResponse, TError> {
+        self.send::<TResponse, TError>("patch").await
     }
 
     pub async fn post<TResponse: DeserializeOwned, TError: From<reqwest::Error>>(

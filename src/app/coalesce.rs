@@ -907,6 +907,60 @@ mod tests {
         PathBuf::from(path)
     }
 
+    fn run_matrix_case_with_nested_folder_structure(events: Vec<Event>, expected: Vec<SyncAction>) {
+        let mut path_to_inode = HashMap::<PathBuf, u64>::new();
+        path_to_inode.insert(PathBuf::from("a.txt"), 1);
+        path_to_inode.insert(PathBuf::from("b.txt"), 2);
+        path_to_inode.insert(PathBuf::from("f"), 3);
+        path_to_inode.insert(PathBuf::from("f/b.txt"), 4);
+        path_to_inode.insert(PathBuf::from("f/sub"), 5);
+        path_to_inode.insert(PathBuf::from("f/sub/deep.txt"), 6);
+        path_to_inode.insert(PathBuf::from("f/sub/deep"), 7);
+        path_to_inode.insert(PathBuf::from("f/sub/deep/deepest.txt"), 8);
+
+        let mut direct_children = HashMap::<PathBuf, Vec<(PathBuf, u64)>>::new();
+        direct_children.insert(
+            path_buf("/"),
+            vec![
+                (path_buf("a.txt"), 1),
+                (path_buf("b.txt"), 2),
+                (path_buf("f"), 3),
+            ],
+        );
+        direct_children.insert(
+            path_buf("f"),
+            vec![(path_buf("f/b.txt"), 4), (path_buf("f/sub"), 5)],
+        );
+        direct_children.insert(
+            path_buf("f/sub"),
+            vec![(path_buf("f/sub/deep.txt"), 6), (path_buf("f/sub/deep"), 7)],
+        );
+        direct_children.insert(
+            path_buf("f/sub/deep"),
+            vec![(path_buf("f/sub/deep/deepest.txt"), 8)],
+        );
+
+        let inode_to_path: HashMap<u64, PathBuf> = path_to_inode
+            .clone()
+            .into_iter()
+            .map(|(k, v)| (v, k))
+            .collect();
+
+        let mut fs_index = FsIndex {
+            path_to_inode,
+            inode_to_path,
+            direct_children,
+        };
+
+        let mut events_processer = EventsTransaction::new(&mut fs_index);
+        for e in events.iter() {
+            events_processer.append_event(e);
+        }
+
+        let result = events_processer.to_sync_actions();
+        assert_eq!(result, expected);
+    }
+
     fn run_matrix_case(events: Vec<Event>, expected: Vec<SyncAction>) {
         let mut path_to_inode = HashMap::<PathBuf, u64>::new();
         path_to_inode.insert(PathBuf::from("a.txt"), 1);
@@ -939,7 +993,6 @@ mod tests {
 
         let mut events_processer = EventsTransaction::new(&mut fs_index);
         for e in events.iter() {
-            println!("{:?}", events_processer.id_to_entry);
             events_processer.append_event(e);
         }
 
@@ -2270,5 +2323,249 @@ mod tests {
     )]
     fn matrix_complex_mixed_flows(#[case] events: Vec<Event>, #[case] expected: Vec<SyncAction>) {
         run_matrix_case(events, expected);
+    }
+
+    // -----------------------------------------------------------------------
+    // Nested folder scenarios
+    // -----------------------------------------------------------------------
+
+    #[rstest]
+    #[case::nested_folder_removed_removes_all_descendants(
+        // Initial state: f/ contains sub/ which contains deep.txt
+        // f/sub/ removed → should delete deep.txt then remove sub/
+        vec![
+            Event::FolderRemoved(path_buf("f/sub"), 5),
+        ],
+        vec![
+            SyncAction::RemoveFolder(path_buf("f/sub")),
+        ]
+    )]
+    #[case::nested_folder_renamed_then_file_renamed_inside(
+        // f/sub/ renamed to f/newsub/, then f/sub/deep.txt renamed to f/newsub/deep.txt
+        vec![
+            Event::FolderRenamed { from: path_buf("f/sub"), to: path_buf("f/newsub"), inode: 5 },
+            Event::FileRenamed { from: path_buf("f/sub/deep.txt"), to: path_buf("f/newsub/deep.txt"), inode: 6 },
+            Event::FolderRenamed {from: path_buf("f/sub/deep"), to: path_buf("f/newsub/deep"), inode: 7},
+            Event::FileRenamed {from: path_buf("f/sub/deep/deepest.txt"), to: path_buf("f/newsub/deep/deepest.txt"), inode: 8},
+        ],
+        vec![
+            SyncAction::MoveFolder { from: path_buf("f/sub"), to: path_buf("f/newsub") },
+        ]
+    )]
+    #[case::parent_folder_renamed_then_nested_folder_renamed(
+        // f/ renamed to g/, then f/sub/ renamed to g/newsub/
+        vec![
+            Event::FolderRenamed { from: path_buf("f"), to: path_buf("g"), inode: 3 },
+            Event::FolderRenamed { from: path_buf("f/sub"), to: path_buf("g/newsub"), inode: 5 },
+            Event::FileRenamed { from: path_buf("f/sub/deep.txt"), to: path_buf("g/newsub/deep.txt"), inode: 6 },
+            Event::FileRenamed { from: path_buf("f/b.txt"), to: path_buf("g/b.txt"), inode: 4 },
+        ],
+        vec![
+            SyncAction::Move { from: path_buf("f/b.txt"), to: path_buf("g/b.txt") },
+            SyncAction::MoveFolder { from: path_buf("f"), to: path_buf("g") },
+            SyncAction::Move { from: path_buf("f/sub/deep.txt"), to: path_buf("g/newsub/deep.txt") },
+            SyncAction::MoveFolder { from: path_buf("f/sub"), to: path_buf("g/newsub") },
+        ]
+    )]
+    #[case::parent_folder_removed_with_nested_subfolder(
+        // f/ removed, which contains sub/ which contains deep.txt, plus f/b.txt
+        vec![
+            Event::FolderRemoved(path_buf("f"), 3),
+        ],
+        vec![
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
+    )]
+    #[case::file_modified_in_nested_folder_then_parent_removed(
+        vec![
+            Event::FileModified(path_buf("f/sub/deep.txt"), 6, 6),
+            Event::FolderRemoved(path_buf("f"), 3),
+        ],
+        vec![
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
+    )]
+    #[case::file_renamed_out_of_nested_folder_then_parent_removed(
+        vec![
+            Event::FileRenamed { from: path_buf("f/sub/deep.txt"), to: path_buf("saved.txt"), inode: 6 },
+            Event::FolderRemoved(path_buf("f"), 3),
+        ],
+        vec![
+            SyncAction::Move { from: path_buf("f/sub/deep.txt"), to: path_buf("saved.txt") },
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
+    )]
+    #[case::nested_folder_removed_then_parent_renamed(
+        vec![
+            Event::FolderRemoved(path_buf("f/sub"), 5),
+            Event::FolderRenamed { from: path_buf("f"), to: path_buf("g"), inode: 3 },
+            Event::FileRenamed { from: path_buf("f/b.txt"), to: path_buf("g/b.txt"), inode: 4 },
+        ],
+        vec![
+            SyncAction::RemoveFolder(path_buf("f/sub")),
+            SyncAction::MoveFolder { from: path_buf("f"), to: path_buf("g") },
+
+        ]
+    )]
+    #[case::nested_folder_created_with_file(
+        vec![
+            Event::FolderCreated(path_buf("f/newsub"), 50),
+            Event::FileCreated(path_buf("f/newsub/new.txt"), 51),
+        ],
+        vec![
+            SyncAction::EnsureFolder(path_buf("f/newsub")),
+            SyncAction::Upload(path_buf("f/newsub/new.txt")),
+        ]
+    )]
+    #[case::nested_folder_created_then_removed_is_noop(
+        vec![
+            Event::FolderCreated(path_buf("f/newsub"), 50),
+            Event::FileCreated(path_buf("f/newsub/new.txt"), 51),
+            Event::FolderRemoved(path_buf("f/newsub"), 50),
+        ],
+        vec![]
+    )]
+    #[case::nested_folder_replaced_then_file_added(
+        vec![
+            Event::FolderReplaced { path: path_buf("f/sub"), from: 5, to: 50 },
+            Event::FileAdded(path_buf("f/sub/new.txt"), 61),
+        ],
+        vec![
+            SyncAction::Delete(path_buf("f/sub/deep.txt")),
+            SyncAction::RemoveFolder(path_buf("f/sub/deep")),
+            SyncAction::EnsureFolder(path_buf("f/sub")),
+            SyncAction::Upload(path_buf("f/sub/new.txt")),
+        ]
+    )]
+    #[case::nested_folder_replaced_old_file_gone_new_file_added(
+        // f/sub/ replaced: deep.txt is gone, brand_new.txt added
+        vec![
+            Event::FolderReplaced { path: path_buf("f/sub"), from: 30, to: 60 },
+            Event::FileAdded(path_buf("f/sub/brand_new.txt"), 70),
+        ],
+        vec![
+            SyncAction::Delete(path_buf("f/sub/deep.txt")),
+            SyncAction::RemoveFolder(path_buf("f/sub/deep")),
+            SyncAction::EnsureFolder(path_buf("f/sub")),
+            SyncAction::Upload(path_buf("f/sub/brand_new.txt")),
+        ]
+    )]
+    #[case::nested_folder_renamed_then_removed(
+        vec![
+            Event::FolderRenamed { from: path_buf("f/sub"), to: path_buf("f/moved"), inode: 5 },
+            Event::FileRenamed { from: path_buf("f/sub/deep.txt"), to: path_buf("f/moved/deep.txt"), inode: 6 },
+            Event::FolderRemoved(path_buf("f/moved"), 5),
+        ],
+        vec![
+            SyncAction::RemoveFolder(path_buf("f/sub")),
+        ]
+    )]
+    #[case::deeply_nested_folder_removed(
+        // f/sub/deep/ removed which contains deepest.txt
+        vec![
+            Event::FolderRemoved(path_buf("f/sub/deep"), 7),
+        ],
+        vec![
+            SyncAction::RemoveFolder(path_buf("f/sub/deep")),
+        ]
+    )]
+    #[case::parent_replaced_nested_folder_gone(
+        // f/ replaced: sub/ and its contents are gone, new file added at top level
+        vec![
+            Event::FolderReplaced { path: path_buf("f"), from: 3, to: 70 },
+            Event::FileAdded(path_buf("f/new.txt"), 71),
+        ],
+        vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::RemoveFolder(path_buf("f/sub")),
+            SyncAction::Upload(path_buf("f/new.txt")),
+        ]
+    )]
+    #[case::nested_folder_added_with_files(
+        vec![
+            Event::FolderAdded(path_buf("f/newsub"), 80),
+            Event::FileAdded(path_buf("f/newsub/x.txt"), 81),
+            Event::FileAdded(path_buf("f/newsub/y.txt"), 82),
+        ],
+        vec![
+            SyncAction::EnsureFolder(path_buf("f/newsub")),
+            SyncAction::Upload(path_buf("f/newsub/x.txt")),
+            SyncAction::Upload(path_buf("f/newsub/y.txt")),
+        ]
+    )]
+    #[case::nested_folder_added_then_renamed(
+        vec![
+            Event::FolderAdded(path_buf("f/newsub"), 80),
+            Event::FileAdded(path_buf("f/newsub/x.txt"), 81),
+            Event::FolderRenamed { from: path_buf("f/newsub"), to: path_buf("f/renamed_sub"), inode: 80 },
+            Event::FileRenamed { from: path_buf("f/newsub/x.txt"), to: path_buf("f/renamed_sub/x.txt"), inode: 81 },
+        ],
+        vec![
+            SyncAction::Upload(path_buf("f/renamed_sub/x.txt")),
+            SyncAction::EnsureFolder(path_buf("f/renamed_sub")),
+        ]
+    )]
+    #[case::rename_parent_then_modify_file_in_nested(
+        vec![
+            Event::FolderRenamed { from: path_buf("f"), to: path_buf("g"), inode: 3 },
+            Event::FileRenamed { from: path_buf("f/b.txt"), to: path_buf("g/b.txt"), inode: 4 },
+            Event::FolderRenamed { from: path_buf("f/sub"), to: path_buf("g/sub"), inode: 5 },
+            Event::FileRenamed { from: path_buf("f/sub/deep.txt"), to: path_buf("g/sub/deep.txt"), inode: 6 },
+            Event::FileModified(path_buf("g/sub/deep.txt"), 31, 31),
+        ],
+        vec![
+            SyncAction::Move { from: path_buf("f/b.txt"), to: path_buf("g/b.txt") },
+            SyncAction::MoveFolder { from: path_buf("f"), to: path_buf("g") },
+            SyncAction::MoveAndUpload { from: path_buf("f/sub/deep.txt"), to: path_buf("g/sub/deep.txt") },
+            SyncAction::MoveFolder { from: path_buf("f/sub"), to: path_buf("g/sub") },
+        ]
+    )]
+    #[case::nested_folder_created_file_created_then_parent_removed(
+        vec![
+            Event::FolderCreated(path_buf("f/newsub"), 90),
+            Event::FileCreated(path_buf("f/newsub/tmp.txt"), 91),
+            Event::FolderRemoved(path_buf("f"), 3),
+        ],
+        vec![
+            SyncAction::Delete(path_buf("f/b.txt")),
+            SyncAction::Delete(path_buf("f/sub/deep.txt")),
+            SyncAction::RemoveFolder(path_buf("f/sub")),
+            SyncAction::RemoveFolder(path_buf("f")),
+        ]
+    )]
+    #[case::file_replaced_in_nested_folder_then_parent_renamed(
+        vec![
+            Event::FileReplaced { path: path_buf("f/sub/deep.txt"), from: 6, to: 310 },
+            Event::FolderRenamed { from: path_buf("f"), to: path_buf("g"), inode: 3 },
+            Event::FileRenamed { from: path_buf("f/b.txt"), to: path_buf("g/b.txt"), inode: 4 },
+            Event::FolderRenamed { from: path_buf("f/sub"), to: path_buf("g/sub"), inode: 5 },
+            Event::FileRenamed { from: path_buf("f/sub/deep.txt"), to: path_buf("g/sub/deep.txt"), inode: 310 },
+        ],
+        vec![
+            SyncAction::Move { from: path_buf("f/b.txt"), to: path_buf("g/b.txt") },
+            SyncAction::MoveFolder { from: path_buf("f"), to: path_buf("g") },
+            SyncAction::MoveAndUpload { from: path_buf("f/sub/deep.txt"), to: path_buf("g/sub/deep.txt") },
+            SyncAction::MoveFolder { from: path_buf("f/sub"), to: path_buf("g/sub") },
+        ]
+    )]
+    #[case::two_levels_of_nesting_all_renamed(
+        vec![
+            Event::FolderRenamed { from: path_buf("f"), to: path_buf("g"), inode: 3 },
+            Event::FolderRenamed { from: path_buf("f/sub"), to: path_buf("g/sub"), inode: 5 },
+            Event::FolderRenamed { from: path_buf("f/sub/deep"), to: path_buf("g/sub/deep"), inode: 7 },
+            Event::FileRenamed { from: path_buf("f/b.txt"), to: path_buf("g/b.txt"), inode: 4 },
+            Event::FileRenamed { from: path_buf("f/sub/deep.txt"), to: path_buf("g/sub/deep.txt"), inode: 6 },
+            Event::FileRenamed { from: path_buf("f/sub/deep/deepest.txt"), to: path_buf("g/sub/deep/deepest.txt"), inode: 8 },
+        ],
+        vec![
+            SyncAction::MoveFolder { from: path_buf("f"), to: path_buf("g") },
+        ]
+    )]
+    #[case::deeply_nested_file_gets_renamed(
+        vec![Event::FileRenamed {from: path_buf("f/sub/deep/deepest.txt"), to: path_buf("f/dd.txt"), inode: 8}],
+        vec![SyncAction::Move { from: path_buf("f/sub/deep/deepest.txt"), to: path_buf("f/dd.txt") }]
+    )]
+    fn matrix_nested_folder_cases(#[case] events: Vec<Event>, #[case] expected: Vec<SyncAction>) {
+        run_matrix_case_with_nested_folder_structure(events, expected);
     }
 }

@@ -81,7 +81,9 @@ impl OrgSyncScreen {
             text_input("/path/to/folder", &self.local_folder_input)
                 .on_input(Message::LocalFolderChanged)
                 .width(Length::Fill),
-            button("Save").padding(10).on_press(Message::SaveMappingClicked),
+            button("Save")
+                .padding(10)
+                .on_press(Message::SaveMappingClicked),
         ]
         .spacing(10)
         .align_y(Alignment::Center)
@@ -111,7 +113,9 @@ impl OrgSyncScreen {
             .iter()
             .rev()
             .take(200)
-            .fold(column![].spacing(6), |col, line| col.push(text(line).size(12)));
+            .fold(column![].spacing(6), |col, line| {
+                col.push(text(line).size(12))
+            });
 
         let log_panel = container(scrollable(log_items).height(Length::Fill))
             .padding(12)

@@ -1,7 +1,7 @@
 use iced::Task;
 
 use crate::{
-    ArchiveClient,
+    ArchiveClient, UserState,
     app::{
         message::{Message, ScreenMessage},
         state::{Intent, Role, Screen},
@@ -13,8 +13,9 @@ use crate::{
 impl ArchiveClient {
     pub fn handle_message(&mut self, message: Message) -> (Task<Message>, Option<Screen>) {
         let default = (Task::none(), None);
-        match (&mut self.screen, message) {
+        match (&mut self.app.user_state, &mut self.screen, message) {
             (
+                UserState::SignedOut,
                 Screen::SignIn(screen),
                 Message::Screen(ScreenMessage::Login(
                     msg @ screens::signin::Message::SignInClicked,
@@ -26,16 +27,26 @@ impl ArchiveClient {
                 (task, None)
             }
             (
+                UserState::SignedOut,
                 Screen::SignIn(screen),
                 Message::Screen(ScreenMessage::Login(msg @ screens::signin::Message::ClearError)),
             ) => {
                 screen.update(msg);
                 default
             }
-            (_, Message::Auth(auth_msg)) => (self.handle_auth_messages(auth_msg), None),
-            (_, Message::Org(org_msg)) => (self.handle_org_messages(org_msg), None),
-            (_, Message::Sync(sync_msg)) => (self.handle_sync_messages(sync_msg), None),
+            (_, _, Message::Auth(auth_msg)) => (self.handle_auth_messages(auth_msg), None),
+            (user_state, _, Message::Org(org_msg))
+                if !matches!(user_state, UserState::SignedOut) =>
+            {
+                (self.handle_org_messages(org_msg), None)
+            }
             (
+                UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
+                _,
+                Message::Sync(sync_msg),
+            ) => (self.handle_sync_messages(sync_msg), None),
+            (
+                UserState::SignedIn { .. },
                 Screen::OrgSelection(screen),
                 Message::Screen(ScreenMessage::OrgSelection(
                     msg @ screens::org_selection::Message::CreateOrgClicked,
@@ -51,6 +62,7 @@ impl ArchiveClient {
                 (task, None)
             }
             (
+                UserState::SignedIn { .. },
                 Screen::OrgSelection(screen),
                 Message::Screen(ScreenMessage::OrgSelection(
                     screens::org_selection::Message::JoinOrgClicked { org_id, org_name },
@@ -62,7 +74,7 @@ impl ArchiveClient {
                     org_name: org_name.clone(),
                 });
 
-                self.app.org.status = crate::app::state::OrgStatus::Ready;
+                self.app.org.status = crate::app::state::OrgStatus::Created;
                 self.app.session.user.role = Some(Role::User);
                 self.app.org.config.archive_folder_id = org_id;
                 self.app.org.config.archive_folder_name = org_name;
@@ -79,6 +91,7 @@ impl ArchiveClient {
                 default
             }
             (
+                UserState::OrgCreated { .. },
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
                     msg @ screens::org_dashboard::Message::InviteMembersClicked,
@@ -88,6 +101,7 @@ impl ArchiveClient {
                 default
             }
             (
+                UserState::OrgCreated { .. },
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
                     msg @ screens::org_dashboard::Message::InviteEdit(_),
@@ -97,6 +111,7 @@ impl ArchiveClient {
                 default
             }
             (
+                UserState::OrgCreated { .. },
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
                     msg @ screens::org_dashboard::Message::InviteSendClicked,
@@ -124,6 +139,7 @@ impl ArchiveClient {
                 )
             }
             (
+                UserState::OrgCreated { .. },
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
                     msg @ screens::org_dashboard::Message::InviteDoneClicked,
@@ -143,6 +159,7 @@ impl ArchiveClient {
                 }
             }
             (
+                UserState::OrgCreated { .. },
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
                     msg @ screens::org_dashboard::Message::RefreshClicked,
@@ -159,6 +176,7 @@ impl ArchiveClient {
                 (Self::load_dashboard_task(org_id, access_token), None)
             }
             (
+                UserState::OrgCreated { .. },
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
                     screens::org_dashboard::Message::RemoveAccessClicked {
@@ -181,29 +199,41 @@ impl ArchiveClient {
                 )
             }
             (
+                UserState::OrgJoined { .. },
                 Screen::OrgSync(screen),
-                Message::Screen(ScreenMessage::OrgSync(msg @ screens::org_sync::Message::LocalFolderChanged(_))),
+                Message::Screen(ScreenMessage::OrgSync(
+                    msg @ screens::org_sync::Message::LocalFolderChanged(_),
+                )),
             ) => {
                 screen.update(msg);
                 default
             }
             (
+                UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
                 Screen::OrgSync(screen),
-                Message::Screen(ScreenMessage::OrgSync(msg @ screens::org_sync::Message::ClearLogClicked)),
+                Message::Screen(ScreenMessage::OrgSync(
+                    msg @ screens::org_sync::Message::ClearLogClicked,
+                )),
             ) => {
                 screen.update(msg);
                 default
             }
             (
+                UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
                 Screen::OrgSync(screen),
-                Message::Screen(ScreenMessage::OrgSync(msg @ screens::org_sync::Message::StopWatchingClicked)),
+                Message::Screen(ScreenMessage::OrgSync(
+                    msg @ screens::org_sync::Message::StopWatchingClicked,
+                )),
             ) => {
                 screen.update(msg);
                 default
             }
             (
+                UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
                 Screen::OrgSync(screen),
-                Message::Screen(ScreenMessage::OrgSync(msg @ screens::org_sync::Message::SaveMappingClicked)),
+                Message::Screen(ScreenMessage::OrgSync(
+                    msg @ screens::org_sync::Message::SaveMappingClicked,
+                )),
             ) => {
                 screen.update(msg);
 
@@ -215,7 +245,8 @@ impl ArchiveClient {
 
                 let path = std::path::PathBuf::from(&input);
                 if !path.exists() || !path.is_dir() {
-                    screen.status_line = Some("Folder does not exist (or is not a directory).".to_string());
+                    screen.status_line =
+                        Some("Folder does not exist (or is not a directory).".to_string());
                     return default;
                 }
 
@@ -226,8 +257,11 @@ impl ArchiveClient {
                 default
             }
             (
+                UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
                 Screen::OrgSync(screen),
-                Message::Screen(ScreenMessage::OrgSync(msg @ screens::org_sync::Message::StartWatchingClicked)),
+                Message::Screen(ScreenMessage::OrgSync(
+                    msg @ screens::org_sync::Message::StartWatchingClicked,
+                )),
             ) => {
                 // Best-effort: auto-save mapping if it's valid.
                 let input = screen.local_folder_input.trim().to_string();
@@ -245,7 +279,21 @@ impl ArchiveClient {
                 }
 
                 screen.update(msg);
-                default
+
+                if self.app.is_org_created() {
+                    self.app.org.status = super::state::OrgStatus::Loading;
+                    (
+                        Self::on_initial_sync(
+                            self.app.get_access_token().to_string(),
+                            path.as_path(),
+                            self.app.get_org_id().to_string(),
+                            None,
+                        ),
+                        None,
+                    )
+                } else {
+                    default
+                }
             }
             _ => default,
         }

@@ -48,6 +48,16 @@ impl ArchiveClient {
             Intent::LoadDashboard { org_id } => {
                 Self::load_dashboard_task(org_id.clone(), access_token)
             }
+            Intent::InitialSync {
+                root_dir,
+                root_dir_id,
+                progress,
+            } => Self::on_initial_sync(
+                access_token,
+                root_dir.as_path(),
+                root_dir_id.clone(),
+                Some(progress.clone()),
+            ),
         }
     }
 

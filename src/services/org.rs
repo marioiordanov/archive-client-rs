@@ -155,9 +155,7 @@ impl OrgService {
             Err(e) => {
                 return Err(e);
             }
-            Ok(json_value) => {
-                json_value["id"].to_string()
-            }
+            Ok(json_value) => json_value["id"].to_string(),
         };
 
         Ok((created_file, permission_id))

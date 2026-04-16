@@ -2,7 +2,7 @@ use iced::Task;
 use log::warn;
 
 use crate::{
-    ArchiveClient,
+    ArchiveClient, UserState,
     app::{
         self,
         message::{Message, OrgError, OrgMessage},
@@ -14,27 +14,42 @@ use crate::{
 
 impl ArchiveClient {
     pub fn handle_org_messages(&mut self, message: app::message::OrgMessage) -> Task<Message> {
-        match (&mut self.screen, message) {
-            (Screen::OrgSelection(screen), OrgMessage::InvitationsLoaded(Ok(invitations))) => {
-                Self::on_invitations_loaded_ok(screen, invitations)
-            }
-
-            (_, OrgMessage::OrgCreated(Ok(root_folder_entry))) => {
-                self.on_org_created_ok(root_folder_entry)
-            }
+        match (&self.app.user_state, &mut self.screen, message) {
             (
+                crate::UserState::SignedIn { .. },
+                Screen::OrgSelection(screen),
+                OrgMessage::InvitationsLoaded(Ok(invitations)),
+            ) => Self::on_invitations_loaded_ok(screen, invitations),
+
+            (
+                crate::UserState::SignedIn { .. },
+                _,
+                OrgMessage::OrgCreated(Ok(root_folder_entry)),
+            ) => self.on_org_created_ok(root_folder_entry),
+            (
+                crate::UserState::OrgCreated { .. },
                 Screen::OrgDashboard(screen),
                 OrgMessage::InviteUserFinished {
                     run_id,
                     email,
                     result: Ok((folder_id, permission_id)),
                 },
-            ) => Self::on_dashboard_invite_user_finished_ok(&mut self.app, screen, run_id, email, folder_id, permission_id),
+            ) => Self::on_dashboard_invite_user_finished_ok(
+                &mut self.app,
+                screen,
+                run_id,
+                email,
+                folder_id,
+                permission_id,
+            ),
 
-            (Screen::OrgDashboard(screen), OrgMessage::DashboardLoaded(Ok(rows))) => {
-                Self::on_dashboard_loaded_ok(screen, rows)
-            }
             (
+                UserState::OrgCreated { .. },
+                Screen::OrgDashboard(screen),
+                OrgMessage::DashboardLoaded(Ok(rows)),
+            ) => Self::on_dashboard_loaded_ok(screen, rows),
+            (
+                UserState::OrgCreated { .. },
                 Screen::OrgDashboard(screen),
                 OrgMessage::PermissionRevoked {
                     folder_id,
@@ -42,6 +57,7 @@ impl ArchiveClient {
                 },
             ) => Self::on_permission_revoked_ok(screen, folder_id),
             (
+                UserState::OrgCreated { .. },
                 Screen::OrgDashboard(_),
                 OrgMessage::InviteUserFinished {
                     result:
@@ -50,6 +66,7 @@ impl ArchiveClient {
                 },
             ) => self.handle_error(e.into()),
             (
+                UserState::OrgCreated { .. },
                 Screen::OrgDashboard(screen),
                 OrgMessage::InviteUserFinished {
                     run_id,
@@ -61,6 +78,7 @@ impl ArchiveClient {
             }
 
             (
+                UserState::OrgCreated { .. },
                 Screen::OrgDashboard(screen),
                 OrgMessage::PermissionRevoked {
                     folder_id,
@@ -68,13 +86,15 @@ impl ArchiveClient {
                 },
             ) => Self::on_permission_revoked_err(screen, folder_id, e),
 
-            (_, OrgMessage::OrgCreated(Err(e)))
-            | (_, OrgMessage::DashboardLoaded(Err(e)))
-            | (_, OrgMessage::InvitationsLoaded(Err(e)))
-            | (_, OrgMessage::OrgJoined(Err(e)))
-            | (_, OrgMessage::InviteSent(Err(e))) => self.handle_error(e.into()),
-            (screen, msg) => {
-                warn!("unhandled message {msg:?} from {screen} ");
+            (UserState::OrgCreated { .. }, _, OrgMessage::OrgCreated(Err(e)))
+            | (UserState::OrgCreated { .. }, _, OrgMessage::DashboardLoaded(Err(e)))
+            | (UserState::SignedIn { .. }, _, OrgMessage::InvitationsLoaded(Err(e)))
+            | (UserState::SignedIn { .. }, _, OrgMessage::OrgJoined(Err(e)))
+            | (UserState::OrgCreated { .. }, _, OrgMessage::InviteSent(Err(e))) => {
+                self.handle_error(e.into())
+            }
+            (user_state, screen, msg) => {
+                warn!("state {user_state} unhandled message {msg:?} from {screen}");
                 Task::none()
             }
         }
@@ -94,7 +114,7 @@ impl ArchiveClient {
         &mut self,
         root_folder_entry: services::org::RootFolderEntry,
     ) -> Task<Message> {
-        self.app.org.status = app::state::OrgStatus::Ready;
+        self.app.org.status = app::state::OrgStatus::Created;
         self.app.session.user.role = Some(app::state::Role::Owner);
         self.app.org.config = app::state::OrgConfig {
             archive_folder_id: root_folder_entry.id,
@@ -126,20 +146,22 @@ impl ArchiveClient {
         run_id: u64,
         email: String,
         folder_id: String,
-        permission_id: String
+        permission_id: String,
     ) -> Task<Message> {
         screen.update(screens::org_dashboard::Message::RecordInviteInLog {
             run_id,
             email: email.clone(),
             status: screens::org_dashboard::InviteStatus::Sent,
         });
-        screen.update(screens::org_dashboard::Message::AddRow { row: DashboardRow {
-            email,
-            folder_id,
-            active: false,
-            permission_id: Some(permission_id),
-            removing: false,
-        } });
+        screen.update(screens::org_dashboard::Message::AddRow {
+            row: DashboardRow {
+                email,
+                folder_id,
+                active: false,
+                permission_id: Some(permission_id),
+                removing: false,
+            },
+        });
 
         Self::on_dashboard_invite_user_finished_continue(state, screen, run_id)
     }

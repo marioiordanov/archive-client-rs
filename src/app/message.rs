@@ -1,11 +1,15 @@
 use hyper::StatusCode;
 
-use std::path::PathBuf;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     screens,
     services::{
         auth::{AccessTokenResponse, RefreshTokenResponse},
+        drive::DriveFile,
         org::{DashboardRowData, RootFolderEntry},
     },
     ui_error::{UiError, UiErrorKind},
@@ -45,15 +49,58 @@ pub enum OrgMessage {
     },
 }
 
+// always with absolute paths
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SyncAction {
+    Upload(PathBuf),
+    MoveAndUpload { from: PathBuf, to: PathBuf },
+    Move { from: PathBuf, to: PathBuf },
+    Delete(PathBuf),
+    EnsureFolder(PathBuf),
+    RemoveFolder(PathBuf),
+    MoveFolder { from: PathBuf, to: PathBuf },
+}
+
 #[derive(Clone, Debug)]
 pub enum SyncMessage {
-    /// Emitted by the filesystem watcher subscription.
-    FsChanged(PathBuf),
+    InitialSyncCompleted,
+    /// Debounced + deduplicated actions emitted by the filesystem watcher subscription.
+    ActionsReady(Vec<SyncAction>),
 
     /// Result of uploading a changed file.
     UploadFinished {
+        path: PathBuf,
+        result: Result<DriveFile, SyncError>,
+    },
+
+    ObjectMoved {
+        from_path: PathBuf,
+        to_path: PathBuf,
+        result: Result<DriveFile, SyncError>,
+    },
+
+    InitialUploadWithProgress {
+        path: PathBuf,
+        progress: HashMap<PathBuf, String>,
+        result: Result<DriveFile, SyncError>,
+    },
+
+    /// Result of creating or ensuring a folder exists.
+    FolderEnsureFinished {
         path: String,
         result: Result<(), SyncError>,
+    },
+
+    /// Initial Folder creation
+    FolderCreatedFinished {
+        path: String,
+        result: Result<DriveFile, SyncError>,
+    },
+
+    /// Result of opening a specific Drive revision.
+    OpenRevisionFinished {
+        path: String,
+        result: Result<String, SyncError>,
     },
 }
 
@@ -64,6 +111,9 @@ pub enum SyncError {
 
     #[error("I/O error: {0}")]
     Io(String),
+
+    #[error("{0:?} doesnt exist on remote")]
+    PathDoesntExistOnRemote(PathBuf),
 
     #[error(transparent)]
     Common(#[from] CommonServiceError),
@@ -194,7 +244,19 @@ pub enum GlobalError {
     #[error(transparent)]
     OrgError(OrgError),
     #[error(transparent)]
+    SyncError(SyncError),
+    #[error(transparent)]
     Common(CommonServiceError),
+}
+
+impl From<SyncError> for GlobalError {
+    fn from(value: SyncError) -> Self {
+        if let SyncError::Common(e) = value {
+            GlobalError::Common(e)
+        } else {
+            GlobalError::SyncError(value)
+        }
+    }
 }
 
 impl From<AuthError> for GlobalError {
