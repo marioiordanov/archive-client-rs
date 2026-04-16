@@ -63,8 +63,7 @@ impl ArchiveClient {
                 self.handle_error(e.into())
             }
             (Screen::OrgSync(_), SyncMessage::InitialSyncCompleted) => {
-                self.app.org.status = crate::app::state::OrgStatus::Ready;
-                LocalStorageService::save_object(&self.app.org, ObjectType::Org);
+                LocalStorageService::update_object::<crate::app::state::OrgState, _>(ObjectType::Org, |org | org.status = crate::app::state::OrgStatus::Ready);
 
                 self.app.index.save();
 

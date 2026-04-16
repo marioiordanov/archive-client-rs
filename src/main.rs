@@ -71,6 +71,9 @@ enum UserState {
 }
 
 impl UserState {
+    pub(crate) fn sign_out(&mut self) {
+        *self = UserState::SignedOut;
+    }
     pub(crate) fn sign_in(&mut self, user_data: UserData) {
         if let UserState::SignedOut = self {
             *self = UserState::SignedIn { user_data }
@@ -81,7 +84,10 @@ impl UserState {
 
     pub(crate) fn org_create(&mut self, org_id: String) {
         if let UserState::SignedIn { user_data } = self {
-            *self = UserState::OrgCreated { org_id, user_data: user_data.clone() }
+            *self = UserState::OrgCreated {
+                org_id,
+                user_data: user_data.clone(),
+            }
         } else {
             warn!("impossible to create org from {}", self);
         }
@@ -269,14 +275,16 @@ impl ArchiveClient {
             (false, true) => panic!("Impossible"),
         };
 
+        // TODO: fix later
         let open_revision_task = parse_open_revision_request().map(|request| {
-            ArchiveClient::open_revision_task(
-                state.org.config.archive_folder_id.clone(),
-                state.session.user.access_token.clone(),
-                state.org.config.local_folder_path.clone(),
-                request.local_path,
-                request.revision_id,
-            )
+            // ArchiveClient::open_revision_task(
+            //     state.org.config.archive_folder_id.clone(),
+            //     state.session.user.access_token.clone(),
+            //     state.org.config.local_folder_path.clone(),
+            //     request.local_path,
+            //     request.revision_id,
+            // )
+            Task::none()
         });
 
         let task = if let Some(task) = open_revision_task {
@@ -309,12 +317,9 @@ impl ArchiveClient {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        match &self.screen {
-            Screen::OrgSync(screen) if self.app.is_org_ready() && screen.watching => {
-                let Some(mapped) = self.app.org.config.local_folder_path.as_ref() else {
-                    return Subscription::none();
-                };
-                crate::app::subscriptions::fs_watch_subscription(PathBuf::from(mapped))
+        match (&self.screen, &self.app.user_state) {
+            (Screen::OrgSync(screen), UserState::OrgSynced {root_dir, ..})  if screen.watching => {
+                crate::app::subscriptions::fs_watch_subscription(root_dir.clone())
             }
             _ => Subscription::none(),
         }
