@@ -6,6 +6,7 @@ use crate::constants::LOCAL_FOLDER_BASE;
 
 pub struct LocalStorageService;
 
+#[derive(Clone, Copy)]
 pub enum ObjectType {
     UserProfile,
     Org,
@@ -24,6 +25,17 @@ impl LocalStorageService {
             .unwrap();
         let mut file = fs::File::create(path).unwrap();
         file.write_all(json.as_bytes()).unwrap();
+    }
+
+    pub fn update_object<T, F>(obj_type: ObjectType, updater: F) -> Option<()>
+    where
+        T: DeserializeOwned + Serialize,
+        F: FnOnce(&mut T),
+    {
+        let mut obj: T = Self::load_object(obj_type)?;
+        updater(&mut obj);
+        Self::save_object(&obj, obj_type);
+        Some(())
     }
 
     pub fn load_object<T: DeserializeOwned>(obj_type: ObjectType) -> Option<T> {
