@@ -1,7 +1,8 @@
 use iced::Task;
+use log::warn;
 
 use crate::{
-    ArchiveClient,
+    ArchiveClient, UserState,
     app::{
         self,
         message::{GlobalError, Message, OrgMessage},
@@ -14,6 +15,7 @@ use crate::{
 impl ArchiveClient {
     pub fn re_auth(&mut self) -> Task<Message> {
         self.app.session = SessionState::default();
+        self.app.user_state.sign_out();
         self.screen = Screen::SignIn(SignInScreen::default());
         Task::none()
     }
@@ -27,54 +29,76 @@ impl ArchiveClient {
     }
 
     pub fn run_intent(&self, intent: &Intent) -> Task<Message> {
-        let access_token = self.app.session.user.access_token.clone();
-        match intent {
-            Intent::FetchInvitations => {
-                let email = self.app.session.user.email.clone();
-                Self::fetch_invitations_task(email, access_token)
+        match (&self.app.user_state, intent) {
+            (UserState::SignedIn { user_data }, Intent::FetchInvitations) => {
+                Self::fetch_invitations_task(
+                    user_data.email.clone(),
+                    user_data.access_token.clone(),
+                )
             }
-            Intent::CreateOrg => Task::perform(
+            (UserState::SignedIn { user_data }, Intent::CreateOrg) => Task::perform(
                 OrgService::get_or_create_organization(
-                    access_token,
-                    self.app.session.user.email.clone(),
+                    user_data.access_token.clone(),
+                    user_data.email.clone(),
                 ),
                 |organisation| Message::Org(OrgMessage::OrgCreated(organisation)),
             ),
-            Intent::SendInvitations {
-                run_id,
-                email,
-                org_id,
-            } => Self::invite_user_task(*run_id, email.clone(), org_id.clone(), access_token),
-            Intent::LoadDashboard { org_id } => {
-                Self::load_dashboard_task(org_id.clone(), access_token)
+            (
+                UserState::OrgCreated { user_data, .. },
+                Intent::SendInvitations {
+                    run_id,
+                    email,
+                    org_id,
+                },
+            ) => Self::invite_user_task(
+                *run_id,
+                email.clone(),
+                org_id.clone(),
+                user_data.access_token.clone(),
+            ),
+            (UserState::OrgCreated { user_data, .. }, Intent::LoadDashboard { org_id }) => {
+                Self::load_dashboard_task(org_id.clone(), user_data.access_token.clone())
             }
-            Intent::InitialSync {
-                root_dir,
-                root_dir_id,
-                progress,
-            } => Self::on_initial_sync(
-                access_token,
+            (
+                UserState::OrgJoined { user_data, .. },
+                Intent::InitialSync {
+                    root_dir,
+                    root_dir_id,
+                    progress,
+                },
+            ) => Self::on_initial_sync(
+                user_data.access_token.clone(),
                 root_dir.as_path(),
                 root_dir_id.clone(),
                 Some(progress.clone()),
             ),
+            (user_state, intent) => {
+                warn!("impossible combination {user_state} {intent:?}");
+                Task::none()
+            }
         }
     }
 
     pub fn handle_error(&mut self, error: GlobalError) -> Task<Message> {
         match error {
             GlobalError::Common(app::message::CommonServiceError::TokenExpired) => {
-                if !self.app.is_signed_in() {
-                    self.re_auth()
-                } else {
-                    let refresh_token = self.app.session.user.refresh_token.clone();
+                match &self.app.user_state {
+                    crate::UserState::SignedOut => self.re_auth(),
+                    crate::UserState::SignedIn { user_data }
+                    | crate::UserState::OrgCreated { user_data, .. }
+                    | crate::UserState::OrgJoined { user_data, .. }
+                    | crate::UserState::OrgSynced { user_data, .. } => {
+                        let refresh_token = user_data.refresh_token.clone();
 
-                    Task::perform(
-                        async move { AuthService::refresh_access_token(&refresh_token).await },
-                        |response| {
-                            Message::Auth(app::message::AuthMessage::AccessTokenRefreshed(response))
-                        },
-                    )
+                        Task::perform(
+                            async move { AuthService::refresh_access_token(&refresh_token).await },
+                            |response| {
+                                Message::Auth(app::message::AuthMessage::AccessTokenRefreshed(
+                                    response,
+                                ))
+                            },
+                        )
+                    }
                 }
             }
             _ => Task::none(),
