@@ -43,9 +43,9 @@ pub enum Message {
     },
 }
 
-impl Into<ScreenMessage> for Message {
-    fn into(self) -> ScreenMessage {
-        ScreenMessage::OrgDashboard(self)
+impl From<Message> for ScreenMessage {
+    fn from(val: Message) -> Self {
+        ScreenMessage::OrgDashboard(val)
     }
 }
 
@@ -490,7 +490,7 @@ fn render_invite_history(history: &[InviteHistoryRow]) -> Element<'_, Message> {
 
 fn parse_emails(input: &str) -> Vec<String> {
     let mut emails: Vec<String> = input
-        .split(|c| c == '\n' || c == ',' || c == ';')
+        .split(['\n', ',', ';'])
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())

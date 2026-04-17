@@ -7,9 +7,9 @@ use iced::widget::sensor::Key;
 use tokio::sync::{RwLock, RwLockReadGuard};
 
 use crate::{
-    app::message::{CommonServiceError, SyncError},
+    app::message::SyncError,
     services::{
-        drive::{DriveFile, DriveService},
+        drive::DriveService,
         file_index::FileIndex,
     },
 };

@@ -103,8 +103,8 @@ pub enum Message {
     JoinOrgClicked { org_id: String, org_name: String },
 }
 
-impl Into<ScreenMessage> for Message {
-    fn into(self) -> ScreenMessage {
-        ScreenMessage::OrgSelection(self)
+impl From<Message> for ScreenMessage {
+    fn from(val: Message) -> Self {
+        ScreenMessage::OrgSelection(val)
     }
 }

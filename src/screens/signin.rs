@@ -104,8 +104,8 @@ pub enum Message {
     ClearError,
 }
 
-impl Into<ScreenMessage> for Message {
-    fn into(self) -> ScreenMessage {
-        ScreenMessage::Login(self)
+impl From<Message> for ScreenMessage {
+    fn from(val: Message) -> Self {
+        ScreenMessage::Login(val)
     }
 }

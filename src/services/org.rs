@@ -249,7 +249,7 @@ impl OrgService {
             })
             .post::<RootFolderEntry, OrgError>()
             .await
-            .map_err(|e| e.into())
+            .map_err(|e| e)
     }
 
     async fn find_root_folder(

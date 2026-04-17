@@ -66,10 +66,10 @@ impl AuthService {
         refresh_token: &str,
     ) -> Result<RefreshTokenResponse, AuthError> {
         HttpService::<()>::new(TOKEN_URL)
-            .form_data("client_id", &dotenvy::var("CLIENT_ID").unwrap())
+            .form_data("client_id", dotenvy::var("CLIENT_ID").unwrap())
             .form_data("refresh_token", refresh_token)
             .form_data("grant_type", "refresh_token")
-            .form_data("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
+            .form_data("client_secret", dotenvy::var("CLIENT_SECRET").unwrap())
             .post::<RefreshTokenResponse, CommonServiceError>()
             .await
             .map_err(|e| e.into())
@@ -90,13 +90,13 @@ impl AuthService {
             if let Some(code) = params.get("code") {
                 return HttpService::<()>::new(TOKEN_URL)
                     .form_data("code", code)
-                    .form_data("client_id", &dotenvy::var("CLIENT_ID").unwrap())
+                    .form_data("client_id", dotenvy::var("CLIENT_ID").unwrap())
                     .form_data("redirect_uri", REDIRECT_URI)
                     .form_data("grant_type", "authorization_code")
-                    .form_data("client_secret", &dotenvy::var("CLIENT_SECRET").unwrap())
+                    .form_data("client_secret", dotenvy::var("CLIENT_SECRET").unwrap())
                     .post::<AccessTokenResponse, CommonServiceError>()
                     .await
-                    .map_err(|e| AuthError::from(e));
+                    .map_err(AuthError::from);
             }
         }
 

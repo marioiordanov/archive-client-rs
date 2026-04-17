@@ -13,9 +13,9 @@ pub enum Message {
     ClearLogClicked,
 }
 
-impl Into<ScreenMessage> for Message {
-    fn into(self) -> ScreenMessage {
-        ScreenMessage::OrgSync(self)
+impl From<Message> for ScreenMessage {
+    fn from(val: Message) -> Self {
+        ScreenMessage::OrgSync(val)
     }
 }
 

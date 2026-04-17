@@ -4,7 +4,7 @@ use crate::{
     ArchiveClient, UserState,
     app::{
         message::{Message, ScreenMessage},
-        state::{Intent, OrgState, Role, Screen, UserData, UserProfile},
+        state::{Intent, OrgState, Role, Screen, UserProfile},
     },
     screens,
     services::local_storage::{LocalStorageService, ObjectType},

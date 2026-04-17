@@ -1,4 +1,3 @@
-use std::time::SystemTime;
 use std::{path::PathBuf, time::Duration};
 
 use iced::Subscription;
@@ -9,7 +8,7 @@ use crate::app::coalesce;
 use crate::app::fs_index::FsIndex;
 use crate::app::message::{Message, SyncMessage};
 
-const ARCHIVE_WINDOW: Duration = Duration::from_secs(1 * 60); // 15 minutes
+const ARCHIVE_WINDOW: Duration = Duration::from_secs(60); // 15 minutes
 const MAX_ARCHIVE_WINDOW: Duration = Duration::from_secs(3600 * 2);
 
 pub fn fs_watch_subscription(root: PathBuf) -> Subscription<Message> {
@@ -73,7 +72,7 @@ fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Mes
 
                         let mut events_processer = coalesce::EventsTransaction::new(&fs_index);
                         for e in batch.iter() {
-                            events_processer.append_event(&e);
+                            events_processer.append_event(e);
                         }
                         let actions = events_processer.to_sync_actions();
                         batch.clear();

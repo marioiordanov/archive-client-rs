@@ -513,7 +513,7 @@ impl<'a> EventsTransaction<'a> {
             }
             (None, Some(id)) => {
                 // different name same inode
-                let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
+                let entry = self.id_to_entry.get_mut(id).expect("id must be present");
                 entry.action.remove_flag(REMOVED);
                 entry.action.merge(MODIFIED); // file can be modified while it was outside of the watched folder
                 entry.action.merge(RENAMED);
@@ -533,7 +533,7 @@ impl<'a> EventsTransaction<'a> {
             }
             (Some(id), Some(inode_id)) if id == inode_id => {
                 // file returned back,
-                let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
+                let entry = self.id_to_entry.get_mut(id).expect("id must be present");
                 entry.action.remove_flag(REMOVED);
                 entry.action.merge(MODIFIED);
             }
@@ -563,7 +563,7 @@ impl<'a> EventsTransaction<'a> {
             }
             (None, Some(id)) => {
                 // Same inode, different path — folder moved
-                let entry = self.id_to_entry.get_mut(&id).expect("id must be present");
+                let entry = self.id_to_entry.get_mut(id).expect("id must be present");
                 entry.action.remove_flag(REMOVED);
                 entry.action.merge(RENAMED);
 

@@ -21,7 +21,7 @@ impl LocalStorageService {
             fs::create_dir_all(parent).unwrap();
         }
         let json = serde_json::to_string_pretty(obj)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            .map_err(|e| std::io::Error::other(e))
             .unwrap();
         let mut file = fs::File::create(path).unwrap();
         file.write_all(json.as_bytes()).unwrap();

@@ -21,7 +21,7 @@ impl ArchiveClient {
 
     pub fn retry_intent(&self) -> Task<Message> {
         if let Some(intent) = self.app.retry_intent.as_ref() {
-            self.run_intent(&intent)
+            self.run_intent(intent)
         } else {
             Task::none()
         }

@@ -1,6 +1,6 @@
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 
-use iced::{Element, Subscription, Task, advanced::graphics::futures::subscription, time};
+use iced::{Element, Subscription, Task};
 use lazy_static::lazy_static;
 use log::warn;
 use url::Url;
@@ -101,7 +101,7 @@ impl UserState {
     pub(crate) fn org_joined(&mut self, root_folder_id: String) {
         if let UserState::SignedIn { user_data } = self {
             *self = UserState::OrgJoined {
-                root_folder_id: root_folder_id,
+                root_folder_id,
                 user_data: user_data.clone(),
             };
         } else {
@@ -128,7 +128,7 @@ impl UserState {
     pub(crate) fn org_synced(&mut self, resolver: Resolver) {
         if let UserState::OrgSyncing {
             user_data,
-            root_folder_id: root_folder_id,
+            root_folder_id,
             root_dir,
         } = self
         {
@@ -174,11 +174,7 @@ impl ArchiveClient {
 
         let has_org_profile = org_profile.is_some();
 
-        let org = if let Some(org) = org_profile {
-            org
-        } else {
-            OrgState::default()
-        };
+        let org = org_profile.unwrap_or_default();
 
         let mut session = if let Some(user) = user_profile {
             SessionState {
@@ -226,7 +222,7 @@ impl ArchiveClient {
                                 org_id: org_id.clone(),
                             }),
                             user_state: UserState::OrgCreated {
-                                org_id: org_id,
+                                org_id,
                                 user_data: session.user.clone().into(),
                             },
                             index: FileIndex::default(),
@@ -337,7 +333,7 @@ impl ArchiveClient {
             }
         };
 
-        contents.into()
+        contents
     }
 
     fn subscription(&self) -> Subscription<Message> {

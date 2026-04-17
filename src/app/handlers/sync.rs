@@ -13,7 +13,7 @@ use crate::{
     },
     screens,
     services::{
-        drive::{DriveFile, DriveService},
+        drive::DriveService,
         file_index::FileIndex,
         local_storage::{LocalStorageService, ObjectType},
         resolver::Resolver,
@@ -173,7 +173,7 @@ impl ArchiveClient {
                                 Message::Sync(SyncMessage::ObjectMoved {
                                     from_path: from,
                                     to_path: to,
-                                    result: result.map_err(|e| SyncError::Common(e)),
+                                    result: result.map_err(SyncError::Common),
                                 })
                             }));
                         } else {
@@ -277,8 +277,7 @@ impl ArchiveClient {
                     parent_id.to_string(),
                     access_token.clone(),
                 )
-                .await
-                .map_err(SyncError::from)?;
+                .await?;
                 file_id.id
             };
 
@@ -332,9 +331,7 @@ impl ArchiveClient {
                         parent_id.as_str(),
                         access_token.as_str(),
                     )
-                    .await
-                    .map_err(SyncError::from)
-                };
+                    .await};
 
                 if let Ok(drive_file) = &result {
                     object_map.insert(path.clone(), drive_file.id.clone());
@@ -342,7 +339,7 @@ impl ArchiveClient {
 
                 let msg = Message::Sync(SyncMessage::InitialUploadWithProgress {
                     progress: object_map.clone(),
-                    path: path,
+                    path,
                     result,
                 });
                 let next_state = (iter, access_token, object_map);
@@ -437,13 +434,13 @@ impl ArchiveClient {
         org_id: String,
         access_token: String
     ) -> Option<Task<Message>> {
-        let task = DriveService::ensure_folder_on_remote(
+        
+        DriveService::ensure_folder_on_remote(
             org_id,
             root_dir,
             access_token,
             folder_path,
-        );
-        task
+        )
     }
 
     fn on_fs_folder_delete_skip(
@@ -471,9 +468,7 @@ impl ArchiveClient {
             Err(_) => return None,
         };
 
-        if relative.components().next().is_none() {
-            return None;
-        }
+        relative.components().next()?;
 
         Some(removed_path)
     }

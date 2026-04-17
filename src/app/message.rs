@@ -2,7 +2,7 @@ use hyper::StatusCode;
 
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use crate::{
@@ -211,7 +211,7 @@ impl From<reqwest::Error> for CommonServiceError {
                 }
 
                 _ => CommonServiceError::InvalidResponse {
-                    reason: format!("Contact the developer"),
+                    reason: "Contact the developer".to_string(),
                 },
             };
         }

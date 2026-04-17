@@ -7,7 +7,6 @@ use iced::{Task, futures::stream::unfold};
 use reqwest::header;
 use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
-use warp::filters::ext::get;
 
 use crate::{
     HTTP,
@@ -130,11 +129,10 @@ impl DriveService {
                 .files
                 .iter()
                 .filter_map(|f| {
-                    if let Some(val) = f.file.mime_type.as_ref() {
-                        if val.eq("application/vnd.google-apps.folder") {
+                    if let Some(val) = f.file.mime_type.as_ref()
+                        && val.eq("application/vnd.google-apps.folder") {
                             return Some(val);
                         }
-                    }
                     None
                 })
                 .cloned()
@@ -289,12 +287,9 @@ impl DriveService {
 
         let mut segments = vec![];
         for segment in relative_path.components() {
-            match segment {
-                std::path::Component::Normal(os_str) => {
-                    root_dir = root_dir.join(os_str);
-                    segments.push((root_dir.clone(), os_str.to_string_lossy().to_string()));
-                }
-                _ => {}
+            if let std::path::Component::Normal(os_str) = segment {
+                root_dir = root_dir.join(os_str);
+                segments.push((root_dir.clone(), os_str.to_string_lossy().to_string()));
             }
         }
 
@@ -313,7 +308,7 @@ impl DriveService {
                     &folder_name,
                 )
                 .await
-                .map_err(|e| SyncError::from(e));
+                .map_err(SyncError::from);
 
                 if let Ok(folder) = &get_folder_result {
                     current_drive_id = folder.id.clone();
