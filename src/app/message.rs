@@ -10,6 +10,7 @@ use crate::{
     services::{
         auth::{AccessTokenResponse, RefreshTokenResponse},
         drive::DriveFile,
+        file_index::FileIndex,
         org::{DashboardRowData, RootFolderEntry},
     },
     ui_error::{UiError, UiErrorKind},
@@ -63,7 +64,7 @@ pub enum SyncAction {
 
 #[derive(Clone, Debug)]
 pub enum SyncMessage {
-    InitialSyncCompleted,
+    InitialSyncCompleted(Result<FileIndex, SyncError>),
     /// Debounced + deduplicated actions emitted by the filesystem watcher subscription.
     ActionsReady(Vec<SyncAction>),
 

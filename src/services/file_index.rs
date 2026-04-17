@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::services::local_storage::{LocalStorageService, ObjectType};
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct FileIndex {
     #[serde(flatten)]

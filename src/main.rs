@@ -48,7 +48,7 @@ struct ArchiveClient {
 //                             /-> OrgCreated (owner)
 // FLOWS: SignedOut->Signedin /
 //                            \
-//                             \-> OrgJoined -> OrgSynced (user)
+//                             \-> OrgJoined -> OrgSyncing -> OrgSynced (user)
 enum UserState {
     SignedOut,
     SignedIn {
@@ -59,7 +59,12 @@ enum UserState {
         user_data: UserData,
     },
     OrgJoined {
-        root_folder_id: Option<String>,
+        root_folder_id: String,
+        user_data: UserData,
+    },
+    OrgSyncing {
+        root_folder_id: String,
+        root_dir: PathBuf,
         user_data: UserData,
     },
     OrgSynced {
@@ -96,7 +101,7 @@ impl UserState {
     pub(crate) fn org_joined(&mut self, root_folder_id: String) {
         if let UserState::SignedIn { user_data } = self {
             *self = UserState::OrgJoined {
-                root_folder_id: Some(root_folder_id),
+                root_folder_id: root_folder_id,
                 user_data: user_data.clone(),
             };
         } else {
@@ -104,16 +109,33 @@ impl UserState {
         }
     }
 
-    pub(crate) fn org_synced(&mut self, resolver: Resolver, root_dir: PathBuf) {
+    pub(crate) fn org_syncing(&mut self, root_dir: PathBuf) {
         if let UserState::OrgJoined {
             user_data,
-            root_folder_id: Some(root_folder_id),
+            root_folder_id,
+        } = self
+        {
+            *self = UserState::OrgSyncing {
+                root_folder_id: root_folder_id.clone(),
+                user_data: user_data.clone(),
+                root_dir,
+            };
+        } else {
+            warn!("impossible to join org from {}", self);
+        }
+    }
+
+    pub(crate) fn org_synced(&mut self, resolver: Resolver) {
+        if let UserState::OrgSyncing {
+            user_data,
+            root_folder_id: root_folder_id,
+            root_dir,
         } = self
         {
             *self = UserState::OrgSynced {
                 resolver,
                 root_folder_id: root_folder_id.clone(),
-                root_dir,
+                root_dir: root_dir.clone(),
                 user_data: user_data.clone(),
             };
         } else {
@@ -129,6 +151,7 @@ impl std::fmt::Display for UserState {
             UserState::SignedIn { .. } => "Signed in",
             UserState::OrgCreated { .. } => "Owner org created",
             UserState::OrgJoined { .. } => "User joined org",
+            UserState::OrgSyncing { .. } => "User org is syncing",
             UserState::OrgSynced { .. } => "User org synced",
         };
 
@@ -206,8 +229,6 @@ impl ArchiveClient {
                                 org_id: org_id,
                                 user_data: session.user.clone().into(),
                             },
-                            session,
-                            org,
                             index: FileIndex::default(),
                         };
 
@@ -221,11 +242,9 @@ impl ArchiveClient {
 
                         let state = AppState {
                             user_state: UserState::OrgJoined {
-                                root_folder_id: mapped,
+                                root_folder_id: org.config.archive_folder_id,
                                 user_data: session.user.clone().into(),
                             },
-                            session,
-                            org,
                             retry_intent: None,
                             index: FileIndex::load(),
                         };
@@ -253,8 +272,6 @@ impl ArchiveClient {
                     user_state: UserState::SignedIn {
                         user_data: session.user.clone().into(),
                     },
-                    session,
-                    org,
                     retry_intent: Some(Intent::FetchInvitations),
                     index: FileIndex::default(),
                 };
@@ -264,8 +281,6 @@ impl ArchiveClient {
             (false, false) => (
                 AppState {
                     user_state: UserState::SignedOut,
-                    session,
-                    org,
                     retry_intent: None,
                     index: FileIndex::default(),
                 },
@@ -300,6 +315,15 @@ impl ArchiveClient {
     fn view(&self) -> Element<'_, Message> {
         println!("Rendering view for screen {}", self.screen);
 
+        let folder_name = match &self.app.user_state {
+            crate::UserState::SignedOut => "",
+            crate::UserState::SignedIn { user_data }
+            | crate::UserState::OrgCreated { user_data, .. }
+            | crate::UserState::OrgJoined { user_data, .. }
+            | crate::UserState::OrgSyncing { user_data, .. }
+            | crate::UserState::OrgSynced { user_data, .. } => &user_data.email,
+        };
+
         let contents = match &self.screen {
             app::state::Screen::SignIn(screen) => screen.view().map(|m| Message::Screen(m.into())),
             app::state::Screen::OrgSelection(screen) => {
@@ -308,9 +332,9 @@ impl ArchiveClient {
             app::state::Screen::OrgDashboard(screen) => {
                 screen.view().map(|m| Message::Screen(m.into()))
             }
-            app::state::Screen::OrgSync(screen) => screen
-                .view(&self.app.org.config.archive_folder_name)
-                .map(|m| Message::Screen(m.into())),
+            app::state::Screen::OrgSync(screen) => {
+                screen.view(folder_name).map(|m| Message::Screen(m.into()))
+            }
         };
 
         contents.into()
@@ -318,7 +342,7 @@ impl ArchiveClient {
 
     fn subscription(&self) -> Subscription<Message> {
         match (&self.screen, &self.app.user_state) {
-            (Screen::OrgSync(screen), UserState::OrgSynced {root_dir, ..})  if screen.watching => {
+            (Screen::OrgSync(screen), UserState::OrgSynced { root_dir, .. }) if screen.watching => {
                 crate::app::subscriptions::fs_watch_subscription(root_dir.clone())
             }
             _ => Subscription::none(),

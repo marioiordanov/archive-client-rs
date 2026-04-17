@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use iced::Task;
 
 use crate::{
@@ -81,5 +83,16 @@ impl ArchiveClient {
             },
             move |result| Message::Org(OrgMessage::PermissionRevoked { folder_id, result }),
         )
+    }
+
+    pub fn initial_sync_task(
+        access_token: String,
+        root_dir: PathBuf,
+        root_dir_id: String,
+    ) -> Task<Message> {
+        let future = ArchiveClient::initial_sync(access_token, root_dir, root_dir_id);
+        Task::perform(future, |result| {
+            Message::Sync(app::message::SyncMessage::InitialSyncCompleted(result))
+        })
     }
 }

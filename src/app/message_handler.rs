@@ -4,7 +4,7 @@ use crate::{
     ArchiveClient, UserState,
     app::{
         message::{Message, ScreenMessage},
-        state::{Intent, Role, Screen},
+        state::{Intent, OrgState, Role, Screen, UserData, UserProfile},
     },
     screens,
     services::local_storage::{LocalStorageService, ObjectType},
@@ -46,7 +46,7 @@ impl ArchiveClient {
                 Message::Sync(sync_msg),
             ) => (self.handle_sync_messages(sync_msg), None),
             (
-                UserState::SignedIn { .. },
+                UserState::SignedIn { user_data },
                 Screen::OrgSelection(screen),
                 Message::Screen(ScreenMessage::OrgSelection(
                     msg @ screens::org_selection::Message::CreateOrgClicked,
@@ -56,8 +56,8 @@ impl ArchiveClient {
                 self.app.retry_intent = Some(Intent::CreateOrg);
 
                 let task = ArchiveClient::get_or_create_organization_task(
-                    self.app.session.user.email.clone(),
-                    self.app.session.user.access_token.clone(),
+                    user_data.email.clone(),
+                    user_data.access_token.clone(),
                 );
                 (task, None)
             }
@@ -74,18 +74,24 @@ impl ArchiveClient {
                     org_name: org_name.clone(),
                 });
 
-                self.app.org.status = crate::app::state::OrgStatus::Created;
-                self.app.session.user.role = Some(Role::User);
-                self.app.org.config.archive_folder_id = org_id;
-                self.app.org.config.archive_folder_name = org_name;
                 // Keep any existing mapping if present (e.g. user re-joins same org id).
+                let mut org = LocalStorageService::load_object::<OrgState>(ObjectType::Org)
+                    .unwrap_or_default();
+                org.status = crate::app::state::OrgStatus::Created;
+                org.config.archive_folder_id = org_id;
+                org.config.archive_folder_name = org_name;
+                LocalStorageService::save_object(&org, ObjectType::Org);
 
-                LocalStorageService::save_object(&self.app.org, ObjectType::Org);
-                LocalStorageService::save_object(&self.app.session.user, ObjectType::UserProfile);
+                LocalStorageService::update_object::<UserProfile, _>(
+                    ObjectType::UserProfile,
+                    |user| {
+                        user.role = Some(Role::User);
+                    },
+                );
 
                 self.app.retry_intent = None;
                 self.screen = Screen::OrgSync(screens::org_sync::OrgSyncScreen::new(
-                    self.app.org.config.local_folder_path.clone(),
+                    org.config.local_folder_path,
                 ));
 
                 default
@@ -111,7 +117,7 @@ impl ArchiveClient {
                 default
             }
             (
-                UserState::OrgCreated { .. },
+                UserState::OrgCreated { org_id, user_data },
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
                     msg @ screens::org_dashboard::Message::InviteSendClicked,
@@ -124,8 +130,7 @@ impl ArchiveClient {
                     return default;
                 };
 
-                let org_id = self.app.get_org_id().to_string();
-                let access_token = self.app.session.user.access_token.clone();
+                let access_token = user_data.access_token.clone();
 
                 self.app.retry_intent = Some(Intent::SendInvitations {
                     run_id,
@@ -134,12 +139,12 @@ impl ArchiveClient {
                 });
 
                 (
-                    Self::invite_user_task(run_id, email, org_id, access_token),
+                    Self::invite_user_task(run_id, email, org_id.clone(), access_token),
                     None,
                 )
             }
             (
-                UserState::OrgCreated { .. },
+                UserState::OrgCreated { org_id, user_data },
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
                     msg @ screens::org_dashboard::Message::InviteDoneClicked,
@@ -148,18 +153,20 @@ impl ArchiveClient {
                 if screen.invite_can_done() {
                     screen.update(msg);
 
-                    let org_id = self.app.org.config.archive_folder_id.clone();
-                    let access_token = self.app.session.user.access_token.clone();
+                    let access_token = user_data.access_token.clone();
                     self.app.retry_intent = Some(Intent::LoadDashboard {
                         org_id: org_id.clone(),
                     });
-                    (Self::load_dashboard_task(org_id, access_token), None)
+                    (
+                        Self::load_dashboard_task(org_id.clone(), access_token),
+                        None,
+                    )
                 } else {
                     default
                 }
             }
             (
-                UserState::OrgCreated { .. },
+                UserState::OrgCreated { org_id, user_data },
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
                     msg @ screens::org_dashboard::Message::RefreshClicked,
@@ -167,16 +174,18 @@ impl ArchiveClient {
             ) => {
                 screen.update(msg);
 
-                let org_id = self.app.get_org_id().to_string();
-                let access_token = self.app.session.user.access_token.clone();
+                let access_token = user_data.access_token.clone();
                 self.app.retry_intent = Some(Intent::LoadDashboard {
                     org_id: org_id.clone(),
                 });
 
-                (Self::load_dashboard_task(org_id, access_token), None)
+                (
+                    Self::load_dashboard_task(org_id.clone(), access_token),
+                    None,
+                )
             }
             (
-                UserState::OrgCreated { .. },
+                UserState::OrgCreated { user_data, .. },
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(
                     screens::org_dashboard::Message::RemoveAccessClicked {
@@ -192,9 +201,8 @@ impl ArchiveClient {
                     permission_id: permission_id.clone(),
                 });
 
-                let access_token = self.app.session.user.access_token.clone();
                 (
-                    Self::revoke_permission_task(folder_id, email, permission_id, access_token),
+                    Self::revoke_permission_task(folder_id, email, permission_id, user_data.access_token.clone()),
                     None,
                 )
             }
@@ -250,14 +258,17 @@ impl ArchiveClient {
                     return default;
                 }
 
-                self.app.org.config.local_folder_path = Some(input.clone());
+                LocalStorageService::update_object::<OrgState, _>(ObjectType::Org, |org| {
+                    org.config.local_folder_path = Some(input.clone());
+                });
                 screen.mapped_folder = Some(input);
-                LocalStorageService::save_object(&self.app.org, ObjectType::Org);
 
                 default
             }
             (
-                UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
+                user_state @ (UserState::OrgJoined { .. }
+                | UserState::OrgSyncing { .. }
+                | UserState::OrgSynced { .. }),
                 Screen::OrgSync(screen),
                 Message::Screen(ScreenMessage::OrgSync(
                     msg @ screens::org_sync::Message::StartWatchingClicked,
@@ -272,21 +283,32 @@ impl ArchiveClient {
                     return default;
                 }
 
-                if self.app.org.config.local_folder_path.as_deref() != Some(&input) {
-                    self.app.org.config.local_folder_path = Some(input.clone());
+                let mut org = LocalStorageService::load_object::<OrgState>(ObjectType::Org)
+                    .unwrap_or_default();
+
+                if org.config.local_folder_path.as_deref() != Some(&input) {
+                    org.config.local_folder_path = Some(input.clone());
                     screen.mapped_folder = Some(input);
-                    LocalStorageService::save_object(&self.app.org, ObjectType::Org);
+                    LocalStorageService::save_object(&org, ObjectType::Org);
                 }
 
                 screen.update(msg);
 
-                if self.app.is_org_created() {
-                    self.app.org.status = super::state::OrgStatus::Loading;
+                if matches!(user_state, UserState::OrgJoined { .. }) {
+                    user_state.org_syncing(path.clone());
+                }
+
+                // if user joined organisation
+                if let UserState::OrgJoined {
+                    root_folder_id,
+                    user_data,
+                } = user_state
+                {
                     (
                         Self::on_initial_sync(
-                            self.app.get_access_token().to_string(),
+                            user_data.access_token.clone(),
                             path.as_path(),
-                            self.app.get_org_id().to_string(),
+                            root_folder_id.clone(),
                             None,
                         ),
                         None,

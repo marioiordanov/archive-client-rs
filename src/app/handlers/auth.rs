@@ -17,26 +17,6 @@ fn on_access_token_refreshed_ok(
     archive_client: &mut ArchiveClient,
     refreshed_token: services::auth::RefreshTokenResponse,
 ) -> Task<Message> {
-    let mut user_profile: UserProfile =
-        LocalStorageService::load_object(services::local_storage::ObjectType::UserProfile)
-            .unwrap_or_default();
-
-    archive_client.app.session.user.access_token = refreshed_token.access_token.clone();
-    archive_client.app.session.user.token_type = refreshed_token.token_type.clone();
-    archive_client.app.session.user.expires_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        + refreshed_token.expires_in;
-
-    user_profile.access_token = refreshed_token.access_token;
-    user_profile.token_type = refreshed_token.token_type;
-    user_profile.expires_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        + refreshed_token.expires_in;
-
     let user_data = match &mut archive_client.app.user_state {
         UserState::SignedIn { user_data } => user_data,
         UserState::OrgCreated { user_data, .. } => user_data,
@@ -46,12 +26,17 @@ fn on_access_token_refreshed_ok(
             panic!("Impossible case")
         }
     };
-    user_data.access_token = user_profile.access_token.clone();
+    user_data.access_token = refreshed_token.access_token.clone();
 
-    LocalStorageService::save_object(
-        &user_profile,
-        services::local_storage::ObjectType::UserProfile,
-    );
+    LocalStorageService::update_object::<UserProfile, _>(services::local_storage::ObjectType::UserProfile, |user_profile| {
+        user_profile.access_token = refreshed_token.access_token.clone();
+        user_profile.token_type = refreshed_token.token_type;
+        user_profile.expires_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + refreshed_token.expires_in;
+    });
 
     archive_client.retry_intent()
 }
@@ -69,12 +54,10 @@ fn on_access_token_received_ok(
     screen: &mut Screen,
     access_token: services::auth::AccessTokenResponse,
 ) -> Task<Message> {
-    state.session.auth = app::state::AuthState::SignedIn;
     let email =
         services::auth::AuthService::extract_email_from_access_token(&access_token.id_token);
 
-    // Preserve any previously-known role (e.g. if the user re-auths).
-    let role = state.session.user.role.clone();
+    let access_token_str = access_token.access_token.clone();
 
     let user_email = email.clone();
     let user_profile = UserProfile {
@@ -92,7 +75,7 @@ fn on_access_token_received_ok(
             + access_token.expires_in,
         token_type: access_token.token_type,
         access_token: access_token.access_token,
-        role,
+        role:None,
     };
 
     LocalStorageService::save_object(
@@ -102,15 +85,12 @@ fn on_access_token_received_ok(
 
     state.user_state.sign_in(user_profile.clone().into());
 
-    state.session.user = user_profile;
-    state.session.auth = app::state::AuthState::SignedIn;
-
     // Navigate to organization selection screen
     *screen = Screen::OrgSelection(screens::org_selection::OrgSelectionScreen::new());
     state.retry_intent = Some(app::state::Intent::FetchInvitations);
 
     // Fetch invitations for the user
-    ArchiveClient::fetch_invitations_task(user_email, state.session.user.access_token.clone())
+    ArchiveClient::fetch_invitations_task(user_email, access_token_str)
 }
 
 impl ArchiveClient {

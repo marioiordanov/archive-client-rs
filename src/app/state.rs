@@ -26,7 +26,7 @@ impl fmt::Display for Screen {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Intent {
     FetchInvitations,
     CreateOrg,
@@ -46,42 +46,10 @@ pub enum Intent {
 }
 
 pub struct AppState {
-    pub(crate) session: SessionState,
-    pub(crate) org: OrgState,
     pub(crate) index: FileIndex,
 
     pub(crate) user_state: UserState,
     pub retry_intent: Option<Intent>,
-}
-
-impl AppState {
-    pub fn is_signed_in(&self) -> bool {
-        self.session.auth == AuthState::SignedIn
-    }
-
-    pub fn is_org_ready(&self) -> bool {
-        self.org.status == OrgStatus::Ready
-    }
-
-    pub fn is_org_created(&self) -> bool {
-        self.org.status == OrgStatus::Created
-    }
-
-    pub fn get_org_id(&self) -> &str {
-        &self.org.config.archive_folder_id
-    }
-
-    pub fn get_access_token(&self) -> &str {
-        &self.session.user.access_token
-    }
-
-    pub fn get_local_folder(&self) -> Option<PathBuf> {
-        self.org
-            .config
-            .local_folder_path
-            .as_ref()
-            .map(|v| PathBuf::from(v))
-    }
 }
 
 #[derive(Default)]

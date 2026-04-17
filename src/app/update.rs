@@ -6,7 +6,7 @@ use crate::{
     app::{
         self,
         message::{GlobalError, Message, OrgMessage},
-        state::{Intent, Screen, SessionState},
+        state::{Intent, Screen},
     },
     screens::signin::SignInScreen,
     services::{auth::AuthService, org::OrgService},
@@ -14,7 +14,6 @@ use crate::{
 
 impl ArchiveClient {
     pub fn re_auth(&mut self) -> Task<Message> {
-        self.app.session = SessionState::default();
         self.app.user_state.sign_out();
         self.screen = Screen::SignIn(SignInScreen::default());
         Task::none()
@@ -87,6 +86,7 @@ impl ArchiveClient {
                     crate::UserState::SignedIn { user_data }
                     | crate::UserState::OrgCreated { user_data, .. }
                     | crate::UserState::OrgJoined { user_data, .. }
+                    | crate::UserState::OrgSyncing { user_data, .. }
                     | crate::UserState::OrgSynced { user_data, .. } => {
                         let refresh_token = user_data.refresh_token.clone();
 

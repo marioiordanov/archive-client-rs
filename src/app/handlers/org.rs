@@ -6,7 +6,7 @@ use crate::{
     app::{
         self,
         message::{Message, OrgError, OrgMessage},
-        state::{AppState, Intent, Screen},
+        state::{AppState, Intent, OrgState, Screen, UserProfile},
     },
     screens::{self, org_dashboard::DashboardRow},
     services::{self, local_storage::LocalStorageService},
@@ -22,26 +22,32 @@ impl ArchiveClient {
             ) => Self::on_invitations_loaded_ok(screen, invitations),
 
             (
-                crate::UserState::SignedIn { .. },
+                crate::UserState::SignedIn { user_data },
                 _,
                 OrgMessage::OrgCreated(Ok(root_folder_entry)),
-            ) => self.on_org_created_ok(root_folder_entry),
+            ) => self.on_org_created_ok(root_folder_entry, user_data.access_token.clone()),
             (
-                crate::UserState::OrgCreated { .. },
+                crate::UserState::OrgCreated { org_id, user_data },
                 Screen::OrgDashboard(screen),
                 OrgMessage::InviteUserFinished {
                     run_id,
                     email,
                     result: Ok((folder_id, permission_id)),
                 },
-            ) => Self::on_dashboard_invite_user_finished_ok(
-                &mut self.app,
-                screen,
-                run_id,
-                email,
-                folder_id,
-                permission_id,
-            ),
+            ) => {
+                let org_id = org_id.clone();
+                let access_token = user_data.access_token.clone();
+                Self::on_dashboard_invite_user_finished_ok(
+                    &mut self.app,
+                    screen,
+                    run_id,
+                    email,
+                    folder_id,
+                    permission_id,
+                    org_id,
+                    access_token
+                )
+            }
 
             (
                 UserState::OrgCreated { .. },
@@ -66,7 +72,7 @@ impl ArchiveClient {
                 },
             ) => self.handle_error(e.into()),
             (
-                UserState::OrgCreated { .. },
+                UserState::OrgCreated { org_id, user_data },
                 Screen::OrgDashboard(screen),
                 OrgMessage::InviteUserFinished {
                     run_id,
@@ -74,7 +80,9 @@ impl ArchiveClient {
                     result: Err(e),
                 },
             ) => {
-                Self::on_dashboard_invite_user_finished_err(screen, &mut self.app, run_id, email, e)
+                let org_id = org_id.clone();
+                let access_token = user_data.access_token.clone();
+                Self::on_dashboard_invite_user_finished_err(screen, &mut self.app, run_id, email, e, org_id, access_token)
             }
 
             (
@@ -113,22 +121,29 @@ impl ArchiveClient {
     fn on_org_created_ok(
         &mut self,
         root_folder_entry: services::org::RootFolderEntry,
+        access_token: String,
     ) -> Task<Message> {
-        self.app.org.status = app::state::OrgStatus::Created;
-        self.app.session.user.role = Some(app::state::Role::Owner);
-        self.app.org.config = app::state::OrgConfig {
-            archive_folder_id: root_folder_entry.id,
-            archive_folder_name: root_folder_entry.name,
-            local_folder_path: None,
-        };
-        LocalStorageService::save_object(&self.app.org, services::local_storage::ObjectType::Org);
-        LocalStorageService::save_object(
-            &self.app.session.user,
+        LocalStorageService::update_object::<OrgState, _>(
+            services::local_storage::ObjectType::Org,
+            |org| {
+                org.status = app::state::OrgStatus::Created;
+                org.config = app::state::OrgConfig {
+                    archive_folder_id: root_folder_entry.id.clone(),
+                    archive_folder_name: root_folder_entry.name,
+                    local_folder_path: None,
+                }
+            },
+        );
+
+        LocalStorageService::update_object::<UserProfile, _>(
             services::local_storage::ObjectType::UserProfile,
+            |user| {
+                user.role = Some(app::state::Role::Owner);
+            },
         );
 
         // Next step: show dashboard with invite panel open
-        let org_id = self.app.org.config.archive_folder_id.clone();
+        let org_id = root_folder_entry.id;
         let mut screen = screens::org_dashboard::OrgDashboardScreen::new();
         screen.show_invite_panel = true;
         self.screen = Screen::OrgDashboard(screen);
@@ -137,7 +152,9 @@ impl ArchiveClient {
             org_id: org_id.clone(),
         });
 
-        Self::load_dashboard_task(org_id, self.app.session.user.access_token.clone())
+        self.app.user_state.org_create(org_id.clone());
+
+        Self::load_dashboard_task(org_id, access_token)
     }
 
     fn on_dashboard_invite_user_finished_ok(
@@ -147,6 +164,8 @@ impl ArchiveClient {
         email: String,
         folder_id: String,
         permission_id: String,
+        org_id: String,
+        access_token: String
     ) -> Task<Message> {
         screen.update(screens::org_dashboard::Message::RecordInviteInLog {
             run_id,
@@ -163,7 +182,7 @@ impl ArchiveClient {
             },
         });
 
-        Self::on_dashboard_invite_user_finished_continue(state, screen, run_id)
+        Self::on_dashboard_invite_user_finished_continue(state, screen, run_id, org_id,access_token)
     }
 
     fn on_dashboard_invite_user_finished_err(
@@ -172,6 +191,8 @@ impl ArchiveClient {
         run_id: u64,
         email: String,
         error: OrgError,
+        org_id: String,
+        access_token: String
     ) -> Task<Message> {
         screen.update(screens::org_dashboard::Message::RecordInviteInLog {
             run_id,
@@ -179,19 +200,19 @@ impl ArchiveClient {
             status: screens::org_dashboard::InviteStatus::Error(error.to_string()),
         });
 
-        Self::on_dashboard_invite_user_finished_continue(state, screen, run_id)
+        Self::on_dashboard_invite_user_finished_continue(state, screen, run_id, org_id,access_token)
     }
 
     fn on_dashboard_invite_user_finished_continue(
         state: &mut crate::app::state::AppState,
         screen: &mut screens::org_dashboard::OrgDashboardScreen,
         run_id: u64,
+        org_id: String,
+        access_token: String
     ) -> Task<Message> {
         screen.update(screens::org_dashboard::Message::InviteNextEmail);
 
         if let Some((_, next_email)) = screen.invite_current_task() {
-            let org_id = state.get_org_id().to_string();
-            let access_token = state.session.user.access_token.clone();
             state.retry_intent = Some(Intent::SendInvitations {
                 run_id,
                 org_id: org_id.clone(),

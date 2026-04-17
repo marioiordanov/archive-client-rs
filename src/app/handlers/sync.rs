@@ -6,7 +6,7 @@ use std::{
 use iced::{Task, futures::stream};
 
 use crate::{
-    ArchiveClient,
+    ArchiveClient, UserState,
     app::{
         message::{Message, SyncAction, SyncError, SyncMessage},
         state::Screen,
@@ -16,13 +16,15 @@ use crate::{
         drive::{DriveFile, DriveService},
         file_index::FileIndex,
         local_storage::{LocalStorageService, ObjectType},
+        resolver::Resolver,
     },
 };
 
 impl ArchiveClient {
     pub fn handle_sync_messages(&mut self, message: SyncMessage) -> Task<Message> {
-        match (&mut self.screen, message) {
+        match (&self.app.user_state, &mut self.screen, message) {
             (
+                UserState::OrgSyncing { .. },
                 Screen::OrgSync(screen),
                 SyncMessage::InitialUploadWithProgress {
                     path,
@@ -36,6 +38,11 @@ impl ArchiveClient {
                 Task::none()
             }
             (
+                UserState::OrgSyncing {
+                    root_dir,
+                    root_folder_id,
+                    ..
+                },
                 Screen::OrgSync(screen),
                 SyncMessage::InitialUploadWithProgress {
                     path,
@@ -44,16 +51,8 @@ impl ArchiveClient {
                 },
             ) => {
                 screen.push_log(format!("folder uploaded {}", path.display()));
-                let root_dir = PathBuf::from(
-                    self.app
-                        .org
-                        .config
-                        .local_folder_path
-                        .clone()
-                        .unwrap()
-                        .to_string(),
-                );
-                let root_dir_id = self.app.org.config.archive_folder_id.clone();
+                let root_dir = root_dir.clone();
+                let root_dir_id = root_folder_id.clone();
                 self.app.retry_intent = Some(crate::app::state::Intent::InitialSync {
                     root_dir,
                     root_dir_id,
@@ -62,18 +61,38 @@ impl ArchiveClient {
 
                 self.handle_error(e.into())
             }
-            (Screen::OrgSync(_), SyncMessage::InitialSyncCompleted) => {
-                LocalStorageService::update_object::<crate::app::state::OrgState, _>(ObjectType::Org, |org | org.status = crate::app::state::OrgStatus::Ready);
+            (
+                UserState::OrgSyncing { root_dir, .. },
+                Screen::OrgSync(_),
+                SyncMessage::InitialSyncCompleted(Ok(file_index)),
+            ) => {
+                LocalStorageService::update_object::<crate::app::state::OrgState, _>(
+                    ObjectType::Org,
+                    |org| org.status = crate::app::state::OrgStatus::Ready,
+                );
 
-                self.app.index.save();
+                file_index.save();
+                self.app
+                    .user_state
+                    .org_synced(Resolver::new(root_dir.clone(), file_index));
 
                 Task::none()
             }
-            (Screen::OrgSync(screen), SyncMessage::ActionsReady(actions)) => {
-                Self::on_sync_actions(&mut self.app, screen, actions)
+            (
+                UserState::OrgSynced { root_dir, root_folder_id, user_data, .. },
+                Screen::OrgSync(screen),
+                SyncMessage::ActionsReady(actions),
+            ) => {
+                let root_dir = root_dir.clone();
+                let org_id = root_folder_id.clone();
+                let access_token = user_data.access_token.clone();
+                Self::on_sync_actions(&mut self.app, screen, actions, root_dir, org_id, access_token)
             }
-            (Screen::OrgSync(screen), SyncMessage::UploadFinished { path, result }) => match result
-            {
+            (
+                UserState::OrgSynced { .. },
+                Screen::OrgSync(screen),
+                SyncMessage::UploadFinished { path, result },
+            ) => match result {
                 Ok(file) => {
                     screen.push_log(format!("Uploaded: {}", path.display()));
                     self.app.index.put_file_id(path, file.id);
@@ -84,14 +103,22 @@ impl ArchiveClient {
                     self.handle_error(e.into())
                 }
             },
-            (Screen::OrgSync(screen), SyncMessage::FolderEnsureFinished { path, result }) => {
+            (
+                UserState::OrgSynced { .. },
+                Screen::OrgSync(screen),
+                SyncMessage::FolderEnsureFinished { path, result },
+            ) => {
                 match result {
                     Ok(_) => screen.push_log(format!("Ensured folder: {path}")),
                     Err(e) => screen.push_log(format!("Folder create failed: {path} ({e})")),
                 }
                 Task::none()
             }
-            (Screen::OrgSync(screen), SyncMessage::OpenRevisionFinished { path, result }) => {
+            (
+                UserState::OrgSynced { .. },
+                Screen::OrgSync(screen),
+                SyncMessage::OpenRevisionFinished { path, result },
+            ) => {
                 match result {
                     Ok(output_path) => screen
                         .push_log(format!("Opened archived revision: {path} -> {output_path}")),
@@ -109,12 +136,11 @@ impl ArchiveClient {
         state: &mut crate::app::state::AppState,
         screen: &mut screens::org_sync::OrgSyncScreen,
         actions: Vec<SyncAction>,
+        root_dir: PathBuf,
+        org_id: String,
+        access_token: String
     ) -> Task<Message> {
         if actions.is_empty() {
-            return Task::none();
-        }
-
-        if state.org.config.local_folder_path.is_none() {
             return Task::none();
         }
 
@@ -140,7 +166,7 @@ impl ArchiveClient {
                                 object_id.clone(),
                                 object_current_parent_id,
                                 new_parent_id.clone(),
-                                state.get_access_token().to_string(),
+                                access_token.clone(),
                                 file_name,
                             );
                             tasks.push(Task::perform(move_future, |result| {
@@ -165,15 +191,17 @@ impl ArchiveClient {
                     if let Some(task) = Self::fs_upload(
                         &state.index,
                         path,
-                        state.get_access_token().to_string(),
-                        state.get_org_id().to_string(),
-                        PathBuf::from(state.org.config.local_folder_path.clone().unwrap()),
+                        access_token.clone(),
+                        org_id.clone(),
+                        root_dir.clone(),
                     ) {
                         tasks.push(task);
                     }
                 }
                 SyncAction::Delete(path) => {
-                    if let Some(skipped_path) = Self::on_fs_delete_skip(state, path) {
+                    if let Some(skipped_path) =
+                        Self::on_fs_delete_skip(state, path, root_dir.clone())
+                    {
                         screen.push_log(format!(
                             "Skipped deleted file (no Drive delete): {}",
                             skipped_path.display()
@@ -181,12 +209,16 @@ impl ArchiveClient {
                     }
                 }
                 SyncAction::EnsureFolder(path) => {
-                    if let Some(task) = Self::on_fs_ensure_folder(state, screen, path) {
+                    if let Some(task) =
+                        Self::on_fs_ensure_folder(state, screen, path, root_dir.clone(), org_id.clone(), access_token.clone())
+                    {
                         tasks.push(task);
                     }
                 }
                 SyncAction::RemoveFolder(path) => {
-                    if let Some(skipped_path) = Self::on_fs_folder_delete_skip(state, path) {
+                    if let Some(skipped_path) =
+                        Self::on_fs_folder_delete_skip(state, path, root_dir.clone())
+                    {
                         screen.push_log(format!(
                             "Skipped deleted folder (no Drive delete): {}",
                             skipped_path.display()
@@ -201,6 +233,59 @@ impl ArchiveClient {
         } else {
             Task::batch(tasks)
         }
+    }
+
+    pub(crate) async fn initial_sync(
+        access_token: String,
+        root_dir: PathBuf,
+        root_dir_id: String,
+    ) -> Result<FileIndex, SyncError> {
+        let actions = Self::walk_directory_to_actions_bfs(root_dir.as_path());
+        let mut file_index = FileIndex::default();
+        file_index.put_file_id(root_dir, root_dir_id);
+
+        let parent_and_paths: Vec<(PathBuf, PathBuf, bool)> = actions
+            .into_iter()
+            .map(|(path, is_folder)| (path.parent().unwrap().to_path_buf(), path, is_folder))
+            .collect();
+
+        for (parent, path, is_folder) in parent_and_paths {
+            let parent_id = file_index.get_file_id(&parent).unwrap();
+            let folder_name = path
+                .file_name()
+                .ok_or(SyncError::Common(
+                    crate::app::message::CommonServiceError::Unknown(
+                        "filename doesn't exist".into(),
+                    ),
+                ))?
+                .to_string_lossy()
+                .to_string();
+
+            let id = if is_folder {
+                let folder_id = DriveService::create_folder(
+                    parent_id.as_str(),
+                    &folder_name,
+                    access_token.as_str(),
+                )
+                .await
+                .map_err(SyncError::from)?;
+
+                folder_id.id
+            } else {
+                let file_id = DriveService::upload_new_file(
+                    path.clone(),
+                    parent_id.to_string(),
+                    access_token.clone(),
+                )
+                .await
+                .map_err(SyncError::from)?;
+                file_id.id
+            };
+
+            file_index.put_file_id(path, id);
+        }
+
+        Ok(file_index)
     }
 
     pub(crate) fn on_initial_sync(
@@ -265,7 +350,7 @@ impl ArchiveClient {
             },
         );
 
-        Task::stream(stream).chain(Task::done(Message::Sync(SyncMessage::InitialSyncCompleted)))
+        Task::stream(stream)
     }
 
     /// Search in fs_index if path exists, then upload to existing file
@@ -315,12 +400,9 @@ impl ArchiveClient {
     fn on_fs_delete_skip(
         state: &mut crate::app::state::AppState,
         removed_path: PathBuf,
+        root_dir: PathBuf,
     ) -> Option<PathBuf> {
-        let Some(mapped_root_str) = state.org.config.local_folder_path.clone() else {
-            return None;
-        };
-
-        let mapped_root = PathBuf::from(mapped_root_str);
+        let mapped_root = root_dir;
         let removed_path = absolutize(&removed_path, &mapped_root);
 
         if removed_path
@@ -351,15 +433,14 @@ impl ArchiveClient {
         state: &mut crate::app::state::AppState,
         screen: &mut screens::org_sync::OrgSyncScreen,
         folder_path: PathBuf,
+        root_dir: PathBuf,
+        org_id: String,
+        access_token: String
     ) -> Option<Task<Message>> {
-        let Some(local_folder) = state.get_local_folder() else {
-            return None;
-        };
-
         let task = DriveService::ensure_folder_on_remote(
-            state.get_org_id().to_string(),
-            local_folder,
-            state.get_access_token().to_string(),
+            org_id,
+            root_dir,
+            access_token,
             folder_path,
         );
         task
@@ -368,12 +449,9 @@ impl ArchiveClient {
     fn on_fs_folder_delete_skip(
         state: &mut crate::app::state::AppState,
         removed_path: PathBuf,
+        root_dir: PathBuf,
     ) -> Option<PathBuf> {
-        let Some(mapped_root_str) = state.org.config.local_folder_path.clone() else {
-            return None;
-        };
-
-        let mapped_root = PathBuf::from(mapped_root_str);
+        let mapped_root = root_dir;
         let removed_path = absolutize(&removed_path, &mapped_root);
 
         if removed_path

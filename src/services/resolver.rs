@@ -4,6 +4,7 @@ use std::{
 };
 
 use iced::widget::sensor::Key;
+use tokio::sync::{RwLock, RwLockReadGuard};
 
 use crate::{
     app::message::{CommonServiceError, SyncError},
@@ -16,18 +17,28 @@ use crate::{
 #[derive(Default)]
 pub(crate) struct Resolver {
     local_storage: Arc<tokio::sync::RwLock<FileIndex>>,
-    root_dir: Arc<tokio::sync::RwLock<PathBuf>>,
+    root_dir: PathBuf,
 }
 
 //
 impl Resolver {
+    pub fn new(root_dir: PathBuf, file_index: FileIndex) -> Self {
+        Self {
+            local_storage: Arc::new(RwLock::new(file_index)),
+            root_dir,
+        }
+    }
+
+    pub(crate) async fn get_file_index(&self) -> RwLockReadGuard<FileIndex> {
+        self.local_storage.read().await
+    }
+
     pub(crate) async fn resolve_path_and_create_intermediaries(
         &self,
         path: PathBuf,
         root_dir_id: String,
         access_token: String,
     ) -> Result<String, SyncError> {
-        let root_id = self.root_dir.read().await.to_path_buf();
         let resolve_path_result = self
             .resolve_path(path.clone(), root_dir_id.clone(), access_token.clone())
             .await;
@@ -44,7 +55,7 @@ impl Resolver {
                     .unwrap()
                     .to_string_lossy()
                     .to_string();
-                if intermediate_parent.eq(&root_id) {
+                if intermediate_parent.eq(&self.root_dir) {
                     let drive_folder =
                         DriveService::create_folder(&root_dir_id, &file_name, &access_token)
                             .await?;
@@ -90,13 +101,12 @@ impl Resolver {
         mut root_dir_id: String,
         access_token: String,
     ) -> Result<String, SyncError> {
-        let root_dir = self.root_dir.read().await.clone();
         let is_folder = path.is_dir();
         if let Some(file_id) = self.local_storage.read().await.get_file_id(&path) {
             Ok(file_id.clone())
         } else {
             let mut ancestors = path
-                .strip_prefix(&root_dir)
+                .strip_prefix(&self.root_dir)
                 .expect("Mismatch between path and root_dir")
                 .ancestors()
                 .into_iter()
@@ -105,7 +115,7 @@ impl Resolver {
 
             // start from the second element, because the first is the root_dir directory and it is returned as empty string
             for parent in ancestors[1..ancestors.len() - 1].iter() {
-                let current_path = root_dir.join(parent);
+                let current_path = self.root_dir.join(parent);
                 if let Some(file_id) = self.local_storage.read().await.get_file_id(&current_path) {
                     root_dir_id = file_id.clone();
                 } else {
@@ -168,7 +178,7 @@ mod tests {
 
         let r = Resolver {
             local_storage: Arc::new(RwLock::new(local_storage)),
-            root_dir: Arc::new(RwLock::new(root)),
+            root_dir: root,
         };
 
         let id = r
