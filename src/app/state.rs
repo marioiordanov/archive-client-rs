@@ -40,8 +40,6 @@ pub enum Intent {
     },
     InitialSync {
         root_dir: PathBuf,
-        root_dir_id: String,
-        progress: HashMap<PathBuf, String>,
     },
 }
 

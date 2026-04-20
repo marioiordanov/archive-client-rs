@@ -1,9 +1,6 @@
 use hyper::StatusCode;
 
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-};
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     screens,
@@ -64,7 +61,10 @@ pub enum SyncAction {
 
 #[derive(Clone, Debug)]
 pub enum SyncMessage {
-    InitialSyncCompleted(Result<FileIndex, SyncError>),
+    InitialSyncCompleted {
+        root_dir: PathBuf,
+        result: Result<FileIndex, SyncError>,
+    },
     /// Debounced + deduplicated actions emitted by the filesystem watcher subscription.
     ActionsReady(Vec<SyncAction>),
 
@@ -77,12 +77,6 @@ pub enum SyncMessage {
     ObjectMoved {
         from_path: PathBuf,
         to_path: PathBuf,
-        result: Result<DriveFile, SyncError>,
-    },
-
-    InitialUploadWithProgress {
-        path: PathBuf,
-        progress: HashMap<PathBuf, String>,
         result: Result<DriveFile, SyncError>,
     },
 

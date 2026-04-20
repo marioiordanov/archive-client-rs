@@ -11,8 +11,7 @@ use crate::{
 };
 
 impl ArchiveClient {
-    pub fn handle_message(&mut self, message: Message) -> (Task<Message>, Option<Screen>) {
-        let default = (Task::none(), None);
+    pub fn handle_message(&mut self, message: Message) -> Task<Message> {
         match (&mut self.app.user_state, &mut self.screen, message) {
             (
                 UserState::SignedOut,
@@ -24,7 +23,7 @@ impl ArchiveClient {
                 screen.update(msg);
                 let task = ArchiveClient::get_access_token_task();
 
-                (task, None)
+                Task::none()
             }
             (
                 UserState::SignedOut,
@@ -32,19 +31,19 @@ impl ArchiveClient {
                 Message::Screen(ScreenMessage::Login(msg @ screens::signin::Message::ClearError)),
             ) => {
                 screen.update(msg);
-                default
+                Task::none()
             }
-            (_, _, Message::Auth(auth_msg)) => (self.handle_auth_messages(auth_msg), None),
+            (_, _, Message::Auth(auth_msg)) => self.handle_auth_messages(auth_msg),
             (user_state, _, Message::Org(org_msg))
                 if !matches!(user_state, UserState::SignedOut) =>
             {
-                (self.handle_org_messages(org_msg), None)
+                self.handle_org_messages(org_msg)
             }
             (
                 UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
                 _,
                 Message::Sync(sync_msg),
-            ) => (self.handle_sync_messages(sync_msg), None),
+            ) => self.handle_sync_messages(sync_msg),
             (
                 UserState::SignedIn { user_data },
                 Screen::OrgSelection(screen),
@@ -55,11 +54,10 @@ impl ArchiveClient {
                 screen.update(msg.clone());
                 self.app.retry_intent = Some(Intent::CreateOrg);
 
-                let task = ArchiveClient::get_or_create_organization_task(
+                ArchiveClient::get_or_create_organization_task(
                     user_data.email.clone(),
                     user_data.access_token.clone(),
-                );
-                (task, None)
+                )
             }
             (
                 UserState::SignedIn { .. },
@@ -94,7 +92,7 @@ impl ArchiveClient {
                     org.config.local_folder_path,
                 ));
 
-                default
+                Task::none()
             }
             (
                 UserState::OrgCreated { .. },
@@ -104,7 +102,7 @@ impl ArchiveClient {
                 )),
             ) => {
                 screen.update(msg);
-                default
+                Task::none()
             }
             (
                 UserState::OrgCreated { .. },
@@ -114,7 +112,7 @@ impl ArchiveClient {
                 )),
             ) => {
                 screen.update(msg);
-                default
+                Task::none()
             }
             (
                 UserState::OrgCreated { org_id, user_data },
@@ -127,7 +125,7 @@ impl ArchiveClient {
 
                 // Decide whether we can kick off the async work:
                 let Some((run_id, email)) = screen.invite_current_task() else {
-                    return default;
+                    return Task::none();
                 };
 
                 let access_token = user_data.access_token.clone();
@@ -138,10 +136,7 @@ impl ArchiveClient {
                     email: email.clone(),
                 });
 
-                (
-                    Self::invite_user_task(run_id, email, org_id.clone(), access_token),
-                    None,
-                )
+                Self::invite_user_task(run_id, email, org_id.clone(), access_token)
             }
             (
                 UserState::OrgCreated { org_id, user_data },
@@ -157,12 +152,10 @@ impl ArchiveClient {
                     self.app.retry_intent = Some(Intent::LoadDashboard {
                         org_id: org_id.clone(),
                     });
-                    (
-                        Self::load_dashboard_task(org_id.clone(), access_token),
-                        None,
-                    )
+
+                    Self::load_dashboard_task(org_id.clone(), access_token)
                 } else {
-                    default
+                    Task::none()
                 }
             }
             (
@@ -179,10 +172,7 @@ impl ArchiveClient {
                     org_id: org_id.clone(),
                 });
 
-                (
-                    Self::load_dashboard_task(org_id.clone(), access_token),
-                    None,
-                )
+                Self::load_dashboard_task(org_id.clone(), access_token)
             }
             (
                 UserState::OrgCreated { user_data, .. },
@@ -201,9 +191,11 @@ impl ArchiveClient {
                     permission_id: permission_id.clone(),
                 });
 
-                (
-                    Self::revoke_permission_task(folder_id, email, permission_id, user_data.access_token.clone()),
-                    None,
+                Self::revoke_permission_task(
+                    folder_id,
+                    email,
+                    permission_id,
+                    user_data.access_token.clone(),
                 )
             }
             (
@@ -214,7 +206,7 @@ impl ArchiveClient {
                 )),
             ) => {
                 screen.update(msg);
-                default
+                Task::none()
             }
             (
                 UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
@@ -224,7 +216,7 @@ impl ArchiveClient {
                 )),
             ) => {
                 screen.update(msg);
-                default
+                Task::none()
             }
             (
                 UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
@@ -234,7 +226,7 @@ impl ArchiveClient {
                 )),
             ) => {
                 screen.update(msg);
-                default
+                Task::none()
             }
             (
                 UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
@@ -248,14 +240,14 @@ impl ArchiveClient {
                 let input = screen.local_folder_input.trim().to_string();
                 if input.is_empty() {
                     screen.status_line = Some("Enter a folder path first.".to_string());
-                    return default;
+                    return Task::none();
                 }
 
                 let path = std::path::PathBuf::from(&input);
                 if !path.exists() || !path.is_dir() {
                     screen.status_line =
                         Some("Folder does not exist (or is not a directory).".to_string());
-                    return default;
+                    return Task::none();
                 }
 
                 LocalStorageService::update_object::<OrgState, _>(ObjectType::Org, |org| {
@@ -263,12 +255,10 @@ impl ArchiveClient {
                 });
                 screen.mapped_folder = Some(input);
 
-                default
+                Task::none()
             }
             (
-                user_state @ (UserState::OrgJoined { .. }
-                | UserState::OrgSyncing { .. }
-                | UserState::OrgSynced { .. }),
+                user_state @ (UserState::OrgJoined { .. } | UserState::OrgSynced { .. }),
                 Screen::OrgSync(screen),
                 Message::Screen(ScreenMessage::OrgSync(
                     msg @ screens::org_sync::Message::StartWatchingClicked,
@@ -280,7 +270,7 @@ impl ArchiveClient {
                 if input.is_empty() || !path.exists() || !path.is_dir() {
                     screen.status_line = Some("Set a valid local folder path first.".to_string());
                     screen.watching = false;
-                    return default;
+                    return Task::none();
                 }
 
                 let mut org = LocalStorageService::load_object::<OrgState>(ObjectType::Org)
@@ -294,30 +284,22 @@ impl ArchiveClient {
 
                 screen.update(msg);
 
-                if matches!(user_state, UserState::OrgJoined { .. }) {
-                    user_state.org_syncing(path.clone());
-                }
-
-                // if user joined organisation
                 if let UserState::OrgJoined {
                     root_folder_id,
                     user_data,
+                    ..
                 } = user_state
                 {
-                    (
-                        Self::on_initial_sync(
-                            user_data.access_token.clone(),
-                            path.as_path(),
-                            root_folder_id.clone(),
-                            None,
-                        ),
-                        None,
+                    Self::initial_sync_task(
+                        user_data.access_token.clone(),
+                        path,
+                        root_folder_id.clone(),
                     )
                 } else {
-                    default
+                    Task::none()
                 }
             }
-            _ => default,
+            _ => Task::none(),
         }
     }
 }

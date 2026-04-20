@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{fs::File, path::PathBuf};
 
 use iced::{Element, Subscription, Task};
 use lazy_static::lazy_static;
@@ -14,7 +14,10 @@ mod ui_error;
 use crate::{
     app::{
         message::Message,
-        state::{AppState, Intent, OrgState, Role, Screen, SessionState, UserData, UserProfile},
+        state::{
+            AppState, Intent, OrgConfig, OrgState, Role, Screen, SessionState, UserData,
+            UserProfile,
+        },
     },
     services::{file_index::FileIndex, local_storage::LocalStorageService, resolver::Resolver},
 };
@@ -62,11 +65,6 @@ enum UserState {
         root_folder_id: String,
         user_data: UserData,
     },
-    OrgSyncing {
-        root_folder_id: String,
-        root_dir: PathBuf,
-        user_data: UserData,
-    },
     OrgSynced {
         resolver: Resolver,
         root_folder_id: String,
@@ -109,33 +107,16 @@ impl UserState {
         }
     }
 
-    pub(crate) fn org_syncing(&mut self, root_dir: PathBuf) {
+    pub(crate) fn org_synced(&mut self, resolver: Resolver, root_dir: PathBuf) {
         if let UserState::OrgJoined {
             user_data,
             root_folder_id,
         } = self
         {
-            *self = UserState::OrgSyncing {
-                root_folder_id: root_folder_id.clone(),
-                user_data: user_data.clone(),
-                root_dir,
-            };
-        } else {
-            warn!("impossible to join org from {}", self);
-        }
-    }
-
-    pub(crate) fn org_synced(&mut self, resolver: Resolver) {
-        if let UserState::OrgSyncing {
-            user_data,
-            root_folder_id,
-            root_dir,
-        } = self
-        {
             *self = UserState::OrgSynced {
                 resolver,
                 root_folder_id: root_folder_id.clone(),
-                root_dir: root_dir.clone(),
+                root_dir: root_dir,
                 user_data: user_data.clone(),
             };
         } else {
@@ -151,7 +132,6 @@ impl std::fmt::Display for UserState {
             UserState::SignedIn { .. } => "Signed in",
             UserState::OrgCreated { .. } => "Owner org created",
             UserState::OrgJoined { .. } => "User joined org",
-            UserState::OrgSyncing { .. } => "User org is syncing",
             UserState::OrgSynced { .. } => "User org synced",
         };
 
@@ -236,11 +216,29 @@ impl ArchiveClient {
                             screens::org_sync::OrgSyncScreen::new(mapped.clone()),
                         );
 
-                        let state = AppState {
-                            user_state: UserState::OrgJoined {
+                        let user_state = if let Some(root_dir) = mapped
+                            .clone()
+                            .map(|dir| PathBuf::from(dir))
+                            .filter(|_| org.status == app::state::OrgStatus::Ready)
+                        {
+                            let resolver =
+                                Resolver::new(PathBuf::from(root_dir.clone()), FileIndex::load());
+
+                            UserState::OrgSynced {
+                                resolver,
+                                root_dir,
                                 root_folder_id: org.config.archive_folder_id,
                                 user_data: session.user.clone().into(),
-                            },
+                            }
+                        } else {
+                            UserState::OrgJoined {
+                                root_folder_id: org.config.archive_folder_id,
+                                user_data: session.user.clone().into(),
+                            }
+                        };
+
+                        let state = AppState {
+                            user_state,
                             retry_intent: None,
                             index: FileIndex::load(),
                         };
@@ -316,7 +314,6 @@ impl ArchiveClient {
             crate::UserState::SignedIn { user_data }
             | crate::UserState::OrgCreated { user_data, .. }
             | crate::UserState::OrgJoined { user_data, .. }
-            | crate::UserState::OrgSyncing { user_data, .. }
             | crate::UserState::OrgSynced { user_data, .. } => &user_data.email,
         };
 

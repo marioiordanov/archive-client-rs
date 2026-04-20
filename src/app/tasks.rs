@@ -90,9 +90,9 @@ impl ArchiveClient {
         root_dir: PathBuf,
         root_dir_id: String,
     ) -> Task<Message> {
-        let future = ArchiveClient::initial_sync(access_token, root_dir, root_dir_id);
+        let future = ArchiveClient::initial_sync(access_token, root_dir.clone(), root_dir_id);
         Task::perform(future, |result| {
-            Message::Sync(app::message::SyncMessage::InitialSyncCompleted(result))
+            Message::Sync(app::message::SyncMessage::InitialSyncCompleted { result, root_dir })
         })
     }
 }

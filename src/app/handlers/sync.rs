@@ -9,7 +9,7 @@ use crate::{
     ArchiveClient, UserState,
     app::{
         message::{Message, SyncAction, SyncError, SyncMessage},
-        state::Screen,
+        state::{OrgConfig, OrgState, Screen, UserProfile},
     },
     screens,
     services::{
@@ -24,47 +24,9 @@ impl ArchiveClient {
     pub fn handle_sync_messages(&mut self, message: SyncMessage) -> Task<Message> {
         match (&self.app.user_state, &mut self.screen, message) {
             (
-                UserState::OrgSyncing { .. },
-                Screen::OrgSync(screen),
-                SyncMessage::InitialUploadWithProgress {
-                    path,
-                    result: Ok(drive_file),
-                    ..
-                },
-            ) => {
-                screen.push_log(format!("folder uploaded {}", path.display()));
-                self.app.index.put_file_id(path, drive_file.id);
-
-                Task::none()
-            }
-            (
-                UserState::OrgSyncing {
-                    root_dir,
-                    root_folder_id,
-                    ..
-                },
-                Screen::OrgSync(screen),
-                SyncMessage::InitialUploadWithProgress {
-                    path,
-                    result: Err(e),
-                    progress,
-                },
-            ) => {
-                screen.push_log(format!("folder uploaded {}", path.display()));
-                let root_dir = root_dir.clone();
-                let root_dir_id = root_folder_id.clone();
-                self.app.retry_intent = Some(crate::app::state::Intent::InitialSync {
-                    root_dir,
-                    root_dir_id,
-                    progress,
-                });
-
-                self.handle_error(e.into())
-            }
-            (
-                UserState::OrgSyncing { root_dir, .. },
+                UserState::OrgJoined { .. },
                 Screen::OrgSync(_),
-                SyncMessage::InitialSyncCompleted(Ok(file_index)),
+                SyncMessage::InitialSyncCompleted {root_dir, result: Ok(file_index)},
             ) => {
                 LocalStorageService::update_object::<crate::app::state::OrgState, _>(
                     ObjectType::Org,
@@ -74,7 +36,10 @@ impl ArchiveClient {
                 file_index.save();
                 self.app
                     .user_state
-                    .org_synced(Resolver::new(root_dir.clone(), file_index));
+                    .org_synced(Resolver::new(root_dir.clone(), file_index), root_dir);
+                LocalStorageService::update_object::<OrgState, _>(ObjectType::Org, |org| {
+                    org.status = crate::app::state::OrgStatus::Ready;
+                });
 
                 Task::none()
             }
@@ -287,69 +252,6 @@ impl ArchiveClient {
         Ok(file_index)
     }
 
-    pub(crate) fn on_initial_sync(
-        access_token: String,
-        root_dir: &Path,
-        root_dir_id: String,
-        current_progress: Option<HashMap<PathBuf, String>>,
-    ) -> Task<Message> {
-        let actions = Self::walk_directory_to_actions_bfs(root_dir);
-
-        let parent_and_paths: Vec<(PathBuf, PathBuf, bool)> = actions
-            .into_iter()
-            .map(|(path, is_folder)| (path.parent().unwrap().to_path_buf(), path, is_folder))
-            .collect();
-
-        let object_map: HashMap<PathBuf, String> = if let Some(progress) = current_progress {
-            progress
-        } else {
-            let mut map = HashMap::new();
-            map.insert(PathBuf::from(root_dir), root_dir_id);
-            map
-        };
-
-        // TODO: implement failure retries. In the case of TokenExpired, stop processing and the continue
-        let stream = stream::unfold(
-            (parent_and_paths.into_iter(), access_token, object_map),
-            |(mut iter, access_token, mut object_map)| async move {
-                let (parent, path, is_folder) = iter.next()?;
-                let folder_name = path.file_name()?.to_string_lossy().to_string();
-                let parent_id = object_map.get(&parent).unwrap();
-
-                let result = if is_folder {
-                    DriveService::create_folder(
-                        parent_id.as_str(),
-                        &folder_name,
-                        access_token.as_str(),
-                    )
-                    .await
-                    .map_err(SyncError::from)
-                } else {
-                    // TODO: use upload_new_file, because during initial sync
-                    DriveService::upload_local_file(
-                        path.as_path(),
-                        parent_id.as_str(),
-                        access_token.as_str(),
-                    )
-                    .await};
-
-                if let Ok(drive_file) = &result {
-                    object_map.insert(path.clone(), drive_file.id.clone());
-                }
-
-                let msg = Message::Sync(SyncMessage::InitialUploadWithProgress {
-                    progress: object_map.clone(),
-                    path,
-                    result,
-                });
-                let next_state = (iter, access_token, object_map);
-                Some((msg, next_state))
-            },
-        );
-
-        Task::stream(stream)
-    }
-
     /// Search in fs_index if path exists, then upload to existing file
     /// Otherwise check if parent folder exists and upload a new file to it
     /// Otherwise upload all the folders up to parent (including) then send a new message SyncAction::Upload
@@ -434,7 +336,7 @@ impl ArchiveClient {
         org_id: String,
         access_token: String
     ) -> Option<Task<Message>> {
-        
+
         DriveService::ensure_folder_on_remote(
             org_id,
             root_dir,

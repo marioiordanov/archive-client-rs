@@ -40,7 +40,7 @@ impl ArchiveClient {
                     user_data.access_token.clone(),
                     user_data.email.clone(),
                 ),
-                |organisation| Message::Org(OrgMessage::OrgCreated(organisation)),
+                |organization| Message::Org(OrgMessage::OrgCreated(organization)),
             ),
             (
                 UserState::OrgCreated { user_data, .. },
@@ -59,17 +59,15 @@ impl ArchiveClient {
                 Self::load_dashboard_task(org_id.clone(), user_data.access_token.clone())
             }
             (
-                UserState::OrgJoined { user_data, .. },
-                Intent::InitialSync {
-                    root_dir,
-                    root_dir_id,
-                    progress,
+                UserState::OrgJoined {
+                    user_data,
+                    root_folder_id,
                 },
-            ) => Self::on_initial_sync(
+                Intent::InitialSync { root_dir },
+            ) => Self::initial_sync_task(
                 user_data.access_token.clone(),
-                root_dir.as_path(),
-                root_dir_id.clone(),
-                Some(progress.clone()),
+                root_dir.clone(),
+                root_folder_id.clone(),
             ),
             (user_state, intent) => {
                 warn!("impossible combination {user_state} {intent:?}");
@@ -86,7 +84,6 @@ impl ArchiveClient {
                     crate::UserState::SignedIn { user_data }
                     | crate::UserState::OrgCreated { user_data, .. }
                     | crate::UserState::OrgJoined { user_data, .. }
-                    | crate::UserState::OrgSyncing { user_data, .. }
                     | crate::UserState::OrgSynced { user_data, .. } => {
                         let refresh_token = user_data.refresh_token.clone();
 
@@ -108,6 +105,6 @@ impl ArchiveClient {
     // changes the state, switch screen if needed
     pub fn update(&mut self, message: Message) -> Task<Message> {
         println!("{message:?}");
-        self.handle_message(message).0
+        self.handle_message(message)
     }
 }
