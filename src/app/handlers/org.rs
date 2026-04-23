@@ -45,7 +45,7 @@ impl ArchiveClient {
                     folder_id,
                     permission_id,
                     org_id,
-                    access_token
+                    access_token,
                 )
             }
 
@@ -67,7 +67,10 @@ impl ArchiveClient {
                 Screen::OrgDashboard(_),
                 OrgMessage::InviteUserFinished {
                     result:
-                        Err(e @ OrgError::Common(app::message::CommonServiceError::TokenExpired)),
+                        Err(
+                            e
+                            @ OrgError::Common(app::message::CommonServiceError::TokenExpired(..)),
+                        ),
                     ..
                 },
             ) => self.handle_error(e.into()),
@@ -82,7 +85,15 @@ impl ArchiveClient {
             ) => {
                 let org_id = org_id.clone();
                 let access_token = user_data.access_token.clone();
-                Self::on_dashboard_invite_user_finished_err(screen, &mut self.app, run_id, email, e, org_id, access_token)
+                Self::on_dashboard_invite_user_finished_err(
+                    screen,
+                    &mut self.app,
+                    run_id,
+                    email,
+                    e,
+                    org_id,
+                    access_token,
+                )
             }
 
             (
@@ -148,7 +159,7 @@ impl ArchiveClient {
         screen.show_invite_panel = true;
         self.screen = Screen::OrgDashboard(screen);
 
-        self.app.retry_intent = Some(Intent::LoadDashboard {
+        self.app.pending_intents.push(Intent::LoadDashboard {
             org_id: org_id.clone(),
         });
 
@@ -165,7 +176,7 @@ impl ArchiveClient {
         folder_id: String,
         permission_id: String,
         org_id: String,
-        access_token: String
+        access_token: String,
     ) -> Task<Message> {
         screen.update(screens::org_dashboard::Message::RecordInviteInLog {
             run_id,
@@ -182,7 +193,13 @@ impl ArchiveClient {
             },
         });
 
-        Self::on_dashboard_invite_user_finished_continue(state, screen, run_id, org_id,access_token)
+        Self::on_dashboard_invite_user_finished_continue(
+            state,
+            screen,
+            run_id,
+            org_id,
+            access_token,
+        )
     }
 
     fn on_dashboard_invite_user_finished_err(
@@ -192,7 +209,7 @@ impl ArchiveClient {
         email: String,
         error: OrgError,
         org_id: String,
-        access_token: String
+        access_token: String,
     ) -> Task<Message> {
         screen.update(screens::org_dashboard::Message::RecordInviteInLog {
             run_id,
@@ -200,7 +217,13 @@ impl ArchiveClient {
             status: screens::org_dashboard::InviteStatus::Error(error.to_string()),
         });
 
-        Self::on_dashboard_invite_user_finished_continue(state, screen, run_id, org_id,access_token)
+        Self::on_dashboard_invite_user_finished_continue(
+            state,
+            screen,
+            run_id,
+            org_id,
+            access_token,
+        )
     }
 
     fn on_dashboard_invite_user_finished_continue(
@@ -208,12 +231,12 @@ impl ArchiveClient {
         screen: &mut screens::org_dashboard::OrgDashboardScreen,
         run_id: u64,
         org_id: String,
-        access_token: String
+        access_token: String,
     ) -> Task<Message> {
         screen.update(screens::org_dashboard::Message::InviteNextEmail);
 
         if let Some((_, next_email)) = screen.invite_current_task() {
-            state.retry_intent = Some(Intent::SendInvitations {
+            state.pending_intents.push(Intent::SendInvitations {
                 run_id,
                 org_id: org_id.clone(),
                 email: next_email.clone(),

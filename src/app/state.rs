@@ -1,5 +1,8 @@
 use core::fmt;
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap},
+    path::PathBuf,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -41,13 +44,29 @@ pub enum Intent {
     InitialSync {
         root_dir: PathBuf,
     },
+    Upload {
+        path: PathBuf,
+    },
+    EnsureFolder {
+        path: PathBuf,
+    },
+    Move {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    MoveAndUpload {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    Remove {
+        path: PathBuf,
+    },
 }
 
 pub struct AppState {
-    pub(crate) index: FileIndex,
-
     pub(crate) user_state: UserState,
-    pub retry_intent: Option<Intent>,
+    pub (crate) pending_intents: Vec<Intent>,
+    pub(crate) pending_refresh: bool,
 }
 
 #[derive(Default)]

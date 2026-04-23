@@ -52,7 +52,7 @@ impl ArchiveClient {
                 )),
             ) => {
                 screen.update(msg.clone());
-                self.app.retry_intent = Some(Intent::CreateOrg);
+                self.app.pending_intents.push(Intent::CreateOrg);
 
                 ArchiveClient::get_or_create_organization_task(
                     user_data.email.clone(),
@@ -87,7 +87,6 @@ impl ArchiveClient {
                     },
                 );
 
-                self.app.retry_intent = None;
                 self.screen = Screen::OrgSync(screens::org_sync::OrgSyncScreen::new(
                     org.config.local_folder_path,
                 ));
@@ -130,7 +129,7 @@ impl ArchiveClient {
 
                 let access_token = user_data.access_token.clone();
 
-                self.app.retry_intent = Some(Intent::SendInvitations {
+                self.app.pending_intents.push(Intent::SendInvitations {
                     run_id,
                     org_id: org_id.clone(),
                     email: email.clone(),
@@ -149,7 +148,7 @@ impl ArchiveClient {
                     screen.update(msg);
 
                     let access_token = user_data.access_token.clone();
-                    self.app.retry_intent = Some(Intent::LoadDashboard {
+                    self.app.pending_intents.push(Intent::LoadDashboard {
                         org_id: org_id.clone(),
                     });
 
@@ -168,7 +167,7 @@ impl ArchiveClient {
                 screen.update(msg);
 
                 let access_token = user_data.access_token.clone();
-                self.app.retry_intent = Some(Intent::LoadDashboard {
+                self.app.pending_intents.push(Intent::LoadDashboard {
                     org_id: org_id.clone(),
                 });
 

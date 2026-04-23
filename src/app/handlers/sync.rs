@@ -1,6 +1,8 @@
 use std::{
     collections::{HashMap, VecDeque},
+    future,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use iced::{Task, futures::stream};
@@ -8,12 +10,13 @@ use iced::{Task, futures::stream};
 use crate::{
     ArchiveClient, UserState,
     app::{
-        message::{Message, SyncAction, SyncError, SyncMessage},
-        state::{OrgConfig, OrgState, Screen, UserProfile},
+        handlers::org,
+        message::{CommonServiceError, Message, SyncAction, SyncError, SyncMessage},
+        state::{Intent, OrgConfig, OrgState, Screen, UserProfile},
     },
     screens,
     services::{
-        drive::DriveService,
+        drive::{DriveFile, DriveService},
         file_index::FileIndex,
         local_storage::{LocalStorageService, ObjectType},
         resolver::Resolver,
@@ -26,58 +29,199 @@ impl ArchiveClient {
             (
                 UserState::OrgJoined { .. },
                 Screen::OrgSync(_),
-                SyncMessage::InitialSyncCompleted {root_dir, result: Ok(file_index)},
-            ) => {
-                LocalStorageService::update_object::<crate::app::state::OrgState, _>(
-                    ObjectType::Org,
-                    |org| org.status = crate::app::state::OrgStatus::Ready,
-                );
+                SyncMessage::InitialSyncCompleted { root_dir, result },
+            ) => match result {
+                Ok(file_index) => {
+                    LocalStorageService::update_object::<crate::app::state::OrgState, _>(
+                        ObjectType::Org,
+                        |org| org.status = crate::app::state::OrgStatus::Ready,
+                    );
 
-                file_index.save();
-                self.app
-                    .user_state
-                    .org_synced(Resolver::new(root_dir.clone(), file_index), root_dir);
-                LocalStorageService::update_object::<OrgState, _>(ObjectType::Org, |org| {
-                    org.status = crate::app::state::OrgStatus::Ready;
-                });
-
-                Task::none()
-            }
+                    file_index.save();
+                    self.app
+                        .user_state
+                        .org_synced(Resolver::new(root_dir.clone(), file_index), root_dir);
+                    LocalStorageService::update_object::<OrgState, _>(ObjectType::Org, |org| {
+                        org.status = crate::app::state::OrgStatus::Ready;
+                    });
+                    Task::none()
+                }
+                Err(e) => {
+                    if matches!(e, SyncError::Common(CommonServiceError::TokenExpired(..))) {
+                        self.app
+                            .pending_intents
+                            .push(Intent::InitialSync { root_dir });
+                    }
+                    self.handle_error(e.into())
+                }
+            },
             (
-                UserState::OrgSynced { root_dir, root_folder_id, user_data, .. },
+                UserState::OrgSynced {
+                    root_dir,
+                    root_folder_id,
+                    user_data,
+                    resolver,
+                },
                 Screen::OrgSync(screen),
                 SyncMessage::ActionsReady(actions),
             ) => {
                 let root_dir = root_dir.clone();
                 let org_id = root_folder_id.clone();
                 let access_token = user_data.access_token.clone();
-                Self::on_sync_actions(&mut self.app, screen, actions, root_dir, org_id, access_token)
+                Self::on_sync_actions(
+                    screen,
+                    actions,
+                    root_dir,
+                    org_id,
+                    access_token,
+                    resolver.clone(),
+                )
             }
             (
-                UserState::OrgSynced { .. },
+                UserState::OrgSynced { resolver, .. },
                 Screen::OrgSync(screen),
                 SyncMessage::UploadFinished { path, result },
             ) => match result {
-                Ok(file) => {
+                Ok(..) => {
                     screen.push_log(format!("Uploaded: {}", path.display()));
-                    self.app.index.put_file_id(path, file.id);
                     Task::none()
                 }
                 Err(e) => {
-                    screen.push_log(format!("Upload failed: {} ({e})", path.display()));
+                    match e {
+                        SyncError::Common(CommonServiceError::TokenExpired(..)) => {
+                            self.app
+                                .pending_intents
+                                .push(Intent::Upload { path: path.clone() });
+                            screen.push_log(format!("Retry upload {}", path.display()));
+                        }
+                        _ => {
+                            screen.push_log(format!("Upload failed: {} ({e})", path.display()));
+                        }
+                    }
+
                     self.handle_error(e.into())
                 }
             },
             (
                 UserState::OrgSynced { .. },
                 Screen::OrgSync(screen),
-                SyncMessage::FolderEnsureFinished { path, result },
+                SyncMessage::FolderEnsureFinished {
+                    path,
+                    result: Err(e),
+                },
             ) => {
-                match result {
-                    Ok(_) => screen.push_log(format!("Ensured folder: {path}")),
-                    Err(e) => screen.push_log(format!("Folder create failed: {path} ({e})")),
+                match e {
+                    SyncError::Common(CommonServiceError::TokenExpired(..)) => {
+                        self.app.pending_intents.push(Intent::EnsureFolder { path });
+                    }
+                    _ => {
+                        screen.push_log(format!("Folder archive failed: {} ({e})", path.display()));
+                    }
                 }
+                self.handle_error(e.into())
+            }
+            (
+                UserState::OrgSynced { .. },
+                Screen::OrgSync(screen),
+                SyncMessage::MoveFinished {
+                    from_path,
+                    to_path,
+                    result,
+                },
+            ) => match result {
+                Ok(_) => {
+                    screen.push_log(format!(
+                        "Renamed from {} to {}",
+                        from_path.display(),
+                        to_path.display()
+                    ));
+                    Task::none()
+                }
+                Err(e) => {
+                    if matches!(e, SyncError::Common(CommonServiceError::TokenExpired(..))) {
+                        self.app.pending_intents.push(Intent::Move {
+                            from: from_path.clone(),
+                            to: to_path.clone(),
+                        });
+                        screen.push_log(format!(
+                            "Retry rename {} to {}",
+                            from_path.display(),
+                            to_path.display()
+                        ));
+                    } else {
+                        screen.push_log(format!(
+                            "Renamed failed from {} to {}",
+                            from_path.display(),
+                            to_path.display()
+                        ));
+                    }
+                    self.handle_error(e.into())
+                }
+            },
+            (
+                UserState::OrgSynced { .. },
+                Screen::OrgSync(screen),
+                SyncMessage::MoveThenUploadFinished { from, to, result },
+            ) => match result {
+                Ok(_) => {
+                    screen.push_log(format!(
+                        "Renamed from {} to {} and uploaded",
+                        from.display(),
+                        to.display()
+                    ));
+                    Task::none()
+                }
+                Err(e) => {
+                    if matches!(e, SyncError::Common(CommonServiceError::TokenExpired(..))) {
+                        self.app.pending_intents.push(Intent::MoveAndUpload {
+                            from: from.clone(),
+                            to: to.clone(),
+                        });
+                        screen.push_log(format!(
+                            "Retry rename and upload {} to {}",
+                            from.display(),
+                            to.display()
+                        ));
+                    } else {
+                        screen.push_log(format!(
+                            "Renamed and upload failed from {} to {}",
+                            from.display(),
+                            to.display()
+                        ));
+                    }
+                    self.handle_error(e.into())
+                }
+            },
+            (
+                UserState::OrgSynced { .. },
+                Screen::OrgSync(screen),
+                SyncMessage::RemoveFinished {
+                    path,
+                    object_was_on_remote: true,
+                    result: Ok(..),
+                },
+            ) => {
+                screen.push_log(format!("Removed {}", path.display(),));
                 Task::none()
+            }
+            (
+                UserState::OrgSynced { .. },
+                Screen::OrgSync(screen),
+                SyncMessage::RemoveFinished {
+                    path,
+                    object_was_on_remote,
+                    result: Err(e),
+                },
+            ) => {
+                if matches!(e, SyncError::Common(CommonServiceError::TokenExpired(..))) {
+                    self.app
+                        .pending_intents
+                        .push(Intent::Remove { path: path.clone() });
+                    screen.push_log(format!("Retry remove {}", path.display(),));
+                } else {
+                    screen.push_log(format!("Remove failed {}", path.display(),));
+                }
+                self.handle_error(e.into())
             }
             (
                 UserState::OrgSynced { .. },
@@ -93,17 +237,49 @@ impl ArchiveClient {
                 }
                 Task::none()
             }
+            (UserState::OrgSynced { resolver, .. }, _, SyncMessage::BatchCompleted) => {
+                resolver.try_save_on_local();
+                Task::none()
+            }
             _ => Task::none(),
         }
     }
 
+    /// Deletes the Drive object at `path` if it exists on remote.
+    ///
+    /// Returns `true` if the object was found and deleted, `false` if it didn't exist on Drive.
+    /// Any other error (network, permissions, etc.) is propagated.
+    pub(crate) async fn delete_object_if_on_remote(
+        path: PathBuf,
+        resolver: Resolver,
+        root_dir_id: String,
+        access_token: String,
+    ) -> Result<bool, SyncError> {
+        let object_id_result = resolver
+            .resolve_path(path.clone(), root_dir_id, access_token.clone())
+            .await;
+
+        let object_was_on_remote = match object_id_result {
+            Ok(object_id) => DriveService::delete_object(object_id, access_token)
+                .await
+                .map_err(SyncError::from)
+                .map(|_| true),
+            Err(SyncError::PathDoesNotExistOnRemote(_)) => Ok(false),
+            Err(err) => Err(err),
+        }?;
+
+        resolver.remove_from_file_index(&path).await;
+
+        Ok(object_was_on_remote)
+    }
+
     fn on_sync_actions(
-        state: &mut crate::app::state::AppState,
         screen: &mut screens::org_sync::OrgSyncScreen,
         actions: Vec<SyncAction>,
         root_dir: PathBuf,
         org_id: String,
-        access_token: String
+        access_token: String,
+        resolver: Resolver,
     ) -> Task<Message> {
         if actions.is_empty() {
             return Task::none();
@@ -112,83 +288,51 @@ impl ArchiveClient {
         let mut tasks = Vec::with_capacity(actions.len());
         for action in actions {
             match action {
-                SyncAction::Move { from, to } => {
-                    let object_id = state.index.get_file_id(&from);
-                    let new_parent = to.parent().unwrap().to_path_buf();
-                    let object_current_parent = from.parent().unwrap().to_path_buf();
-                    let object_current_parent_id = state
-                        .index
-                        .get_file_id(&object_current_parent)
-                        .unwrap()
-                        .clone();
-                    let new_parent_id = state.index.get_file_id(&new_parent);
-
-                    if let Some(object_id) = object_id {
-                        if let Some(new_parent_id) = new_parent_id {
-                            let file_name = to.file_name().unwrap().to_string_lossy().to_string();
-
-                            let move_future = DriveService::move_object(
-                                object_id.clone(),
-                                object_current_parent_id,
-                                new_parent_id.clone(),
-                                access_token.clone(),
-                                file_name,
-                            );
-                            tasks.push(Task::perform(move_future, |result| {
-                                Message::Sync(SyncMessage::ObjectMoved {
-                                    from_path: from,
-                                    to_path: to,
-                                    result: result.map_err(SyncError::Common),
-                                })
-                            }));
-                        } else {
-                            println!("Missing data");
-                        }
-                    }
+                SyncAction::Move { from, to } | SyncAction::MoveFolder { from, to } => {
+                    tasks.push(Self::move_task(
+                        from.clone(),
+                        to.clone(),
+                        root_dir.clone(),
+                        org_id.clone(),
+                        resolver.clone(),
+                        access_token.clone(),
+                    ));
                 }
-                SyncAction::MoveAndUpload { from, to } | SyncAction::MoveFolder { from, to } => {
-                    // TODO
-                    println!("do something");
+                SyncAction::MoveAndUpload { from, to } => {
+                    tasks.push(Self::move_then_upload_task(
+                        from.clone(),
+                        to.clone(),
+                        root_dir.clone(),
+                        org_id.clone(),
+                        resolver.clone(),
+                        access_token.clone(),
+                    ));
                 }
 
                 SyncAction::Upload(path) => {
-                    println!("upload file");
-                    if let Some(task) = Self::fs_upload(
-                        &state.index,
+                    tasks.push(Self::upload_task(
                         path,
-                        access_token.clone(),
-                        org_id.clone(),
                         root_dir.clone(),
-                    ) {
-                        tasks.push(task);
-                    }
+                        org_id.clone(),
+                        resolver.clone(),
+                        access_token.clone(),
+                    ));
                 }
-                SyncAction::Delete(path) => {
-                    if let Some(skipped_path) =
-                        Self::on_fs_delete_skip(state, path, root_dir.clone())
-                    {
-                        screen.push_log(format!(
-                            "Skipped deleted file (no Drive delete): {}",
-                            skipped_path.display()
-                        ));
-                    }
+                SyncAction::Delete(path) | SyncAction::RemoveFolder(path) => {
+                    tasks.push(Self::delete_task(
+                        path,
+                        org_id.clone(),
+                        resolver.clone(),
+                        access_token.clone(),
+                    ));
                 }
                 SyncAction::EnsureFolder(path) => {
-                    if let Some(task) =
-                        Self::on_fs_ensure_folder(state, screen, path, root_dir.clone(), org_id.clone(), access_token.clone())
-                    {
-                        tasks.push(task);
-                    }
-                }
-                SyncAction::RemoveFolder(path) => {
-                    if let Some(skipped_path) =
-                        Self::on_fs_folder_delete_skip(state, path, root_dir.clone())
-                    {
-                        screen.push_log(format!(
-                            "Skipped deleted folder (no Drive delete): {}",
-                            skipped_path.display()
-                        ));
-                    }
+                    tasks.push(Self::ensure_folder_task(
+                        path,
+                        org_id.clone(),
+                        resolver.clone(),
+                        access_token.clone(),
+                    ));
                 }
             }
         }
@@ -196,7 +340,71 @@ impl ArchiveClient {
         if tasks.is_empty() {
             Task::none()
         } else {
-            Task::batch(tasks)
+            Task::batch(tasks).chain(Task::done(Message::Sync(SyncMessage::BatchCompleted)))
+        }
+    }
+
+    pub(crate) async fn move_object(
+        from: PathBuf,
+        to: PathBuf,
+        resolver: Resolver,
+        root_dir: PathBuf,
+        root_dir_id: String,
+        access_token: String,
+    ) -> Result<String, SyncError> {
+        let from_id_result = resolver
+            .resolve_path(from.clone(), root_dir_id.clone(), access_token.clone())
+            .await;
+
+        match from_id_result {
+            Ok(from_id) => {
+                let new_name = to.file_name().unwrap().to_string_lossy().to_string();
+                let old_parent = from.parent().unwrap().to_path_buf();
+                let old_parent_id = resolver
+                    .resolve_path(
+                        old_parent.clone(),
+                        root_dir_id.clone(),
+                        access_token.clone(),
+                    )
+                    .await?;
+
+                let new_parent = to.parent().unwrap().to_path_buf();
+                let new_parent_id = resolver
+                    .resolve_and_create_missing_ancestors(
+                        new_parent,
+                        root_dir_id.clone(),
+                        access_token.clone(),
+                    )
+                    .await?;
+
+                let file_id = DriveService::move_object(
+                    from_id,
+                    old_parent_id,
+                    new_parent_id,
+                    access_token,
+                    new_name,
+                )
+                .await
+                .map(|drive_file| drive_file.id)?;
+
+                resolver.remove_from_file_index(&from).await;
+                resolver.update_file_index(to, file_id.clone()).await;
+
+                Ok(file_id)
+            }
+            Err(SyncError::PathDoesNotExistOnRemote(..)) => {
+                let file_id = Self::upload(
+                    resolver.clone(),
+                    to.clone(),
+                    root_dir,
+                    root_dir_id,
+                    access_token,
+                )
+                .await?;
+                resolver.update_file_index(to, file_id.clone()).await;
+                Ok(file_id)
+            }
+            Err(err) => Err(err),
         }
     }
 
@@ -252,127 +460,49 @@ impl ArchiveClient {
         Ok(file_index)
     }
 
-    /// Search in fs_index if path exists, then upload to existing file
-    /// Otherwise check if parent folder exists and upload a new file to it
-    /// Otherwise upload all the folders up to parent (including) then send a new message SyncAction::Upload
-    fn fs_upload(
-        fs_index: &FileIndex,
+    pub(crate) async fn upload(
+        resolver: Resolver,
         path: PathBuf,
+        root_dir: PathBuf,
+        root_dir_id: String,
         access_token: String,
-        root_folder_id: String,
-        root_dir: PathBuf,
-    ) -> Option<Task<Message>> {
-        if let Some(file_id) = fs_index.get_file_id(&path).cloned() {
-            // upload by using the file id
-            let future = DriveService::upload_existing_file(path.clone(), file_id, access_token);
-            let task = Task::perform(future, |result| {
-                Message::Sync(SyncMessage::UploadFinished { path, result })
-            });
-            return Some(task);
+    ) -> Result<String, SyncError> {
+        let resolve_path_result = resolver
+            .resolve_and_create_missing_ancestors(
+                path.clone(),
+                root_dir_id.clone(),
+                access_token.clone(),
+            )
+            .await;
+
+        match resolve_path_result {
+            Ok(file_id) => {
+                let drive_file =
+                    DriveService::upload_existing_file(path.clone(), file_id, access_token).await?;
+                resolver
+                    .update_file_index(path, drive_file.id.clone())
+                    .await;
+                Ok(drive_file.id)
+            }
+            Err(SyncError::PathDoesNotExistOnRemote(non_existing_path))
+                if non_existing_path.eq(&path) =>
+            {
+                let parent_id = resolver
+                    .resolve_path(
+                        path.parent().unwrap().to_path_buf(),
+                        root_dir_id,
+                        access_token.clone(),
+                    )
+                    .await?;
+                let file_id =
+                    DriveService::upload_new_file(path.clone(), parent_id, access_token).await?;
+                resolver
+                    .update_file_index(path.clone(), file_id.id.clone())
+                    .await;
+                Ok(file_id.id)
+            }
+            Err(e) => Err(e),
         }
-
-        if let Some(parent_folder_id) = fs_index
-            .get_file_id(&path.parent().unwrap().to_path_buf())
-            .cloned()
-        {
-            let future =
-                DriveService::upload_new_file(path.clone(), parent_folder_id, access_token);
-
-            return Some(Task::perform(future, |result| {
-                Message::Sync(SyncMessage::UploadFinished { path, result })
-            }));
-        }
-
-        // try to find the parent and search in google drive for it
-        let parent = path.parent().unwrap().to_path_buf();
-
-        let prerequisite_task =
-            DriveService::ensure_folder_on_remote(root_folder_id, root_dir, access_token, parent);
-
-        prerequisite_task.map(|t| {
-            t.chain(Task::done(Message::Sync(SyncMessage::ActionsReady(vec![
-                SyncAction::Upload(path),
-            ]))))
-        })
-    }
-
-    fn on_fs_delete_skip(
-        state: &mut crate::app::state::AppState,
-        removed_path: PathBuf,
-        root_dir: PathBuf,
-    ) -> Option<PathBuf> {
-        let mapped_root = root_dir;
-        let removed_path = absolutize(&removed_path, &mapped_root);
-
-        if removed_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with('.') || n == ".DS_Store")
-        {
-            return None;
-        }
-
-        if !is_path_under_root(&removed_path, &mapped_root) {
-            return None;
-        }
-
-        let relative = match removed_path.strip_prefix(&mapped_root) {
-            Ok(r) => r,
-            Err(_) => return None,
-        };
-
-        let Some(_file_name) = relative.file_name().and_then(|s| s.to_str()) else {
-            return None;
-        };
-
-        Some(removed_path)
-    }
-
-    fn on_fs_ensure_folder(
-        state: &mut crate::app::state::AppState,
-        screen: &mut screens::org_sync::OrgSyncScreen,
-        folder_path: PathBuf,
-        root_dir: PathBuf,
-        org_id: String,
-        access_token: String
-    ) -> Option<Task<Message>> {
-
-        DriveService::ensure_folder_on_remote(
-            org_id,
-            root_dir,
-            access_token,
-            folder_path,
-        )
-    }
-
-    fn on_fs_folder_delete_skip(
-        state: &mut crate::app::state::AppState,
-        removed_path: PathBuf,
-        root_dir: PathBuf,
-    ) -> Option<PathBuf> {
-        let mapped_root = root_dir;
-        let removed_path = absolutize(&removed_path, &mapped_root);
-
-        if removed_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with('.') || n == ".DS_Store")
-        {
-            return None;
-        }
-
-        if !is_path_under_root(&removed_path, &mapped_root) {
-            return None;
-        }
-
-        let relative = match removed_path.strip_prefix(&mapped_root) {
-            Ok(r) => r,
-            Err(_) => return None,
-        };
-
-        relative.components().next()?;
-
-        Some(removed_path)
     }
 
     pub fn open_revision_task(
@@ -562,6 +692,49 @@ mod tests {
             state::{AppState, OrgState, SessionState, UserProfile},
         },
         screens::org_sync::OrgSyncScreen,
-        services::{auth::AuthService, drive::DriveService, local_storage::LocalStorageService},
+        services::{
+            auth::AuthService, drive::DriveService, file_index::FileIndex,
+            local_storage::LocalStorageService, resolver::Resolver,
+        },
     };
+
+    #[tokio::test]
+    async fn check_upload_file() {
+        //let refresh = AuthService::refresh_access_token("REFRESH_TOKEN".into()).await.unwrap();
+
+        let root_dir = "/Users/mario/Projects/archive-client-rs/test-folder";
+        let path = "/Users/mario/Projects/archive-client-rs/test-folder/mario/aaaa/x";
+        let resolver = Resolver::new(root_dir.into(), FileIndex::default());
+
+        let r = ArchiveClient::upload(
+            resolver,
+            path.into(),
+            root_dir.into(),
+            "18NTDkndn_ESjsActq-6CRFUiMvfHTLWL".into(),
+            "ACCESS_TOKEN".into(),
+        )
+        .await;
+
+        println!("{r:?}");
+    }
+
+    #[tokio::test]
+    async fn check_some_actions() {
+        let refresh = AuthService::refresh_access_token("REFRESH_TOKEN".into()).await.unwrap();
+        let mut screen = OrgSyncScreen::new(None);
+        let root_dir: PathBuf = "/Users/mario/Projects/archive-client-rs/test-folder".into();
+        let resolver = Resolver::new(root_dir.clone(), FileIndex::load());
+
+        let task = ArchiveClient::move_object(
+            "/Users/mario/Projects/archive-client-rs/test-folder/mario/aaaa".into(),
+            "/Users/mario/Projects/archive-client-rs/test-folder/mario/c".into(),
+            resolver,
+            root_dir,
+            "18NTDkndn_ESjsActq-6CRFUiMvfHTLWL".into(),
+            refresh.access_token,
+        )
+        .await;
+
+        println!("{task:?}");
+    }
 }

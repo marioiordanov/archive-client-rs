@@ -138,7 +138,7 @@ impl AuthService {
                     let err_string = err.to_string();
                     let status_code = match err {
                         AuthError::CancelledByUser => StatusCode::BAD_REQUEST,
-                        AuthError::Common(CommonServiceError::TokenExpired) => {
+                        AuthError::Common(CommonServiceError::TokenExpired(..)) => {
                             StatusCode::UNAUTHORIZED
                         }
                         AuthError::Common(CommonServiceError::PermissionDenied) => {

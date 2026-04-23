@@ -19,15 +19,17 @@ impl ArchiveClient {
         Task::none()
     }
 
-    pub fn retry_intent(&self) -> Task<Message> {
-        if let Some(intent) = self.app.retry_intent.as_ref() {
-            self.run_intent(intent)
-        } else {
-            Task::none()
-        }
+    pub fn retry_intents(&mut self) -> Task<Message> {
+        let intents = self.app.pending_intents.drain(..).collect::<Vec<Intent>>();
+        let tasks: Vec<Task<Message>> = intents
+            .into_iter()
+            .map(|intent| self.run_intent(intent))
+            .collect();
+
+        Task::batch(tasks)
     }
 
-    pub fn run_intent(&self, intent: &Intent) -> Task<Message> {
+    pub fn run_intent(&self, intent: Intent) -> Task<Message> {
         match (&self.app.user_state, intent) {
             (UserState::SignedIn { user_data }, Intent::FetchInvitations) => {
                 Self::fetch_invitations_task(
@@ -50,7 +52,7 @@ impl ArchiveClient {
                     org_id,
                 },
             ) => Self::invite_user_task(
-                *run_id,
+                run_id,
                 email.clone(),
                 org_id.clone(),
                 user_data.access_token.clone(),
@@ -66,8 +68,83 @@ impl ArchiveClient {
                 Intent::InitialSync { root_dir },
             ) => Self::initial_sync_task(
                 user_data.access_token.clone(),
+                root_dir,
+                root_folder_id.clone(),
+            ),
+            (
+                UserState::OrgSynced {
+                    resolver,
+                    root_folder_id,
+                    root_dir,
+                    user_data,
+                },
+                Intent::Upload { path },
+            ) => Self::upload_task(
+                path,
                 root_dir.clone(),
                 root_folder_id.clone(),
+                resolver.clone(),
+                user_data.access_token.clone(),
+            ),
+            (
+                UserState::OrgSynced {
+                    resolver,
+                    root_folder_id,
+                    root_dir,
+                    user_data,
+                },
+                Intent::EnsureFolder { path },
+            ) => Self::ensure_folder_task(
+                path,
+                root_folder_id.clone(),
+                resolver.clone(),
+                user_data.access_token.clone(),
+            ),
+            (
+                UserState::OrgSynced {
+                    resolver,
+                    root_folder_id,
+                    root_dir,
+                    user_data,
+                },
+                Intent::Move { from, to },
+            ) => Self::move_task(
+                from,
+                to,
+                root_dir.clone(),
+                root_folder_id.clone(),
+                resolver.clone(),
+                user_data.access_token.clone(),
+            ),
+            (
+                UserState::OrgSynced {
+                    resolver,
+                    root_folder_id,
+                    root_dir,
+                    user_data,
+                },
+                Intent::MoveAndUpload { from, to },
+            ) => Self::move_then_upload_task(
+                from,
+                to,
+                root_dir.clone(),
+                root_folder_id.clone(),
+                resolver.clone(),
+                user_data.access_token.clone(),
+            ),
+            (
+                UserState::OrgSynced {
+                    resolver,
+                    root_folder_id,
+                    root_dir,
+                    user_data,
+                },
+                Intent::Remove { path },
+            ) => Self::delete_task(
+                path,
+                root_folder_id.clone(),
+                resolver.clone(),
+                user_data.access_token.clone(),
             ),
             (user_state, intent) => {
                 warn!("impossible combination {user_state} {intent:?}");
@@ -78,23 +155,36 @@ impl ArchiveClient {
 
     pub fn handle_error(&mut self, error: GlobalError) -> Task<Message> {
         match error {
-            GlobalError::Common(app::message::CommonServiceError::TokenExpired) => {
+            GlobalError::Common(app::message::CommonServiceError::TokenExpired(expired_token)) => {
                 match &self.app.user_state {
                     crate::UserState::SignedOut => self.re_auth(),
                     crate::UserState::SignedIn { user_data }
                     | crate::UserState::OrgCreated { user_data, .. }
                     | crate::UserState::OrgJoined { user_data, .. }
                     | crate::UserState::OrgSynced { user_data, .. } => {
-                        let refresh_token = user_data.refresh_token.clone();
-
-                        Task::perform(
-                            async move { AuthService::refresh_access_token(&refresh_token).await },
-                            |response| {
-                                Message::Auth(app::message::AuthMessage::AccessTokenRefreshed(
-                                    response,
-                                ))
-                            },
-                        )
+                        if user_data.access_token == expired_token {
+                            if self.app.pending_refresh {
+                                println!("refresh is requested");
+                                Task::none()
+                            } else {
+                                let refresh_token = user_data.refresh_token.clone();
+                                self.app.pending_refresh = true;
+                                Task::perform(
+                                    async move {
+                                        AuthService::refresh_access_token(&refresh_token).await
+                                    },
+                                    |response| {
+                                        Message::Auth(
+                                            app::message::AuthMessage::AccessTokenRefreshed(
+                                                response,
+                                            ),
+                                        )
+                                    },
+                                )
+                            }
+                        } else {
+                            Task::none()
+                        }
                     }
                 }
             }

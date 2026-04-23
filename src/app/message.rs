@@ -68,21 +68,29 @@ pub enum SyncMessage {
     /// Debounced + deduplicated actions emitted by the filesystem watcher subscription.
     ActionsReady(Vec<SyncAction>),
 
+    BatchCompleted,
+
     /// Result of uploading a changed file.
     UploadFinished {
         path: PathBuf,
-        result: Result<DriveFile, SyncError>,
+        result: Result<String, SyncError>,
     },
 
-    ObjectMoved {
+    MoveThenUploadFinished {
+        from: PathBuf,
+        to: PathBuf,
+        result: Result<String, SyncError>,
+    },
+
+    MoveFinished {
         from_path: PathBuf,
         to_path: PathBuf,
-        result: Result<DriveFile, SyncError>,
+        result: Result<String, SyncError>,
     },
 
     /// Result of creating or ensuring a folder exists.
     FolderEnsureFinished {
-        path: String,
+        path: PathBuf,
         result: Result<(), SyncError>,
     },
 
@@ -97,6 +105,11 @@ pub enum SyncMessage {
         path: String,
         result: Result<String, SyncError>,
     },
+    RemoveFinished {
+        path: PathBuf,
+        object_was_on_remote: bool,
+        result: Result<(), SyncError>,
+    },
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -108,7 +121,7 @@ pub enum SyncError {
     Io(String),
 
     #[error("{0:?} doesnt exist on remote")]
-    PathDoesntExistOnRemote(PathBuf),
+    PathDoesNotExistOnRemote(PathBuf),
 
     #[error(transparent)]
     Common(#[from] CommonServiceError),
@@ -146,7 +159,7 @@ impl From<AuthError> for UiError {
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum CommonServiceError {
     #[error("Session expired")]
-    TokenExpired,
+    TokenExpired(String),
 
     #[error("Permission denied")]
     PermissionDenied,
@@ -164,7 +177,7 @@ pub enum CommonServiceError {
 impl From<CommonServiceError> for UiError {
     fn from(value: CommonServiceError) -> Self {
         match value {
-            CommonServiceError::TokenExpired => UiError {
+            CommonServiceError::TokenExpired(..) => UiError {
                 title: "Session expired".into(),
                 detail: Some("Please sign in again.".into()),
                 kind: UiErrorKind::Warning,
@@ -193,14 +206,15 @@ impl From<CommonServiceError> for UiError {
     }
 }
 
-impl From<reqwest::Error> for CommonServiceError {
-    fn from(e: reqwest::Error) -> Self {
+impl From<(reqwest::Error, String)> for CommonServiceError {
+    fn from((e, access_token): (reqwest::Error, String)) -> Self {
         // If the error is associated with an HTTP status, classify it first.
         if let Some(status) = e.status() {
             return match status {
-                StatusCode::UNAUTHORIZED => CommonServiceError::TokenExpired,
+                StatusCode::UNAUTHORIZED => CommonServiceError::TokenExpired(access_token),
                 // If you have a more specific variant (e.g., PermissionDenied), map it here.
                 StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::BAD_REQUEST => {
+                    println!("{status}");
                     CommonServiceError::PermissionDenied
                 }
 
@@ -274,15 +288,15 @@ impl From<OrgError> for GlobalError {
     }
 }
 
-impl From<reqwest::Error> for OrgError {
-    fn from(value: reqwest::Error) -> Self {
-        if let Some(status) = value.status() {
+impl From<(reqwest::Error, String)> for OrgError {
+    fn from((error, access_token): (reqwest::Error, String)) -> Self {
+        if let Some(status) = error.status() {
             match status {
                 StatusCode::BAD_REQUEST => OrgError::InvalidEmailInvitation,
-                _ => OrgError::Common(CommonServiceError::from(value)),
+                _ => OrgError::Common(CommonServiceError::from((error, access_token))),
             }
         } else {
-            OrgError::Common(CommonServiceError::from(value))
+            OrgError::Common(CommonServiceError::from((error, access_token)))
         }
     }
 }

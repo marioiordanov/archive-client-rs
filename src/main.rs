@@ -1,4 +1,4 @@
-use std::{fs::File, path::PathBuf};
+use std::{collections::VecDeque, fs::File, path::PathBuf, sync::RwLock};
 
 use iced::{Element, Subscription, Task};
 use lazy_static::lazy_static;
@@ -198,14 +198,14 @@ impl ArchiveClient {
                         );
                         let org_id = org.config.archive_folder_id.clone();
                         let state = AppState {
-                            retry_intent: Some(Intent::LoadDashboard {
+                            pending_intents: vec![Intent::LoadDashboard {
                                 org_id: org_id.clone(),
-                            }),
+                            }],
                             user_state: UserState::OrgCreated {
                                 org_id,
                                 user_data: session.user.clone().into(),
                             },
-                            index: FileIndex::default(),
+                            pending_refresh: false,
                         };
 
                         (state, screen, next_task)
@@ -239,8 +239,8 @@ impl ArchiveClient {
 
                         let state = AppState {
                             user_state,
-                            retry_intent: None,
-                            index: FileIndex::load(),
+                            pending_intents: vec![],
+                            pending_refresh: false,
                         };
                         let next_task = Task::none(); // initial_sync. If nothing in the directory, then create folder structure and upload files
 
@@ -266,8 +266,8 @@ impl ArchiveClient {
                     user_state: UserState::SignedIn {
                         user_data: session.user.clone().into(),
                     },
-                    retry_intent: Some(Intent::FetchInvitations),
-                    index: FileIndex::default(),
+                    pending_intents: vec![Intent::FetchInvitations],
+                    pending_refresh: false,
                 };
 
                 (state, screen, next_task)
@@ -275,8 +275,8 @@ impl ArchiveClient {
             (false, false) => (
                 AppState {
                     user_state: UserState::SignedOut,
-                    retry_intent: None,
-                    index: FileIndex::default(),
+                    pending_intents: vec![],
+                    pending_refresh: false,
                 },
                 app::state::Screen::SignIn(screens::signin::SignInScreen::default()),
                 Task::none(),

@@ -8,7 +8,7 @@ use crate::app::coalesce;
 use crate::app::fs_index::FsIndex;
 use crate::app::message::{Message, SyncMessage};
 
-const ARCHIVE_WINDOW: Duration = Duration::from_secs(60); // 15 minutes
+const ARCHIVE_WINDOW: Duration = Duration::from_secs(20); // 15 minutes
 const MAX_ARCHIVE_WINDOW: Duration = Duration::from_secs(3600 * 2);
 
 pub fn fs_watch_subscription(root: PathBuf) -> Subscription<Message> {

@@ -27,18 +27,22 @@ fn on_access_token_refreshed_ok(
         }
     };
     user_data.access_token = refreshed_token.access_token.clone();
+    archive_client.app.pending_refresh = false;
 
-    LocalStorageService::update_object::<UserProfile, _>(services::local_storage::ObjectType::UserProfile, |user_profile| {
-        user_profile.access_token = refreshed_token.access_token.clone();
-        user_profile.token_type = refreshed_token.token_type;
-        user_profile.expires_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        + refreshed_token.expires_in;
-    });
+    LocalStorageService::update_object::<UserProfile, _>(
+        services::local_storage::ObjectType::UserProfile,
+        |user_profile| {
+            user_profile.access_token = refreshed_token.access_token.clone();
+            user_profile.token_type = refreshed_token.token_type;
+            user_profile.expires_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                + refreshed_token.expires_in;
+        },
+    );
 
-    archive_client.retry_intent()
+    archive_client.retry_intents()
 }
 
 fn on_access_token_received_err(
@@ -75,7 +79,7 @@ fn on_access_token_received_ok(
             + access_token.expires_in,
         token_type: access_token.token_type,
         access_token: access_token.access_token,
-        role:None,
+        role: None,
     };
 
     LocalStorageService::save_object(
@@ -87,7 +91,9 @@ fn on_access_token_received_ok(
 
     // Navigate to organization selection screen
     *screen = Screen::OrgSelection(screens::org_selection::OrgSelectionScreen::new());
-    state.retry_intent = Some(app::state::Intent::FetchInvitations);
+    state
+        .pending_intents
+        .push(app::state::Intent::FetchInvitations);
 
     // Fetch invitations for the user
     ArchiveClient::fetch_invitations_task(user_email, access_token_str)

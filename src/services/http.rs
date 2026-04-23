@@ -84,66 +84,72 @@ impl<TRequest: Serialize> HttpService<TRequest> {
         request
     }
 
-    pub async fn put<TResponse: DeserializeOwned, TError: From<reqwest::Error>>(
+    pub async fn put<TResponse: DeserializeOwned, TError: From<(reqwest::Error, String)>>(
         self,
     ) -> Result<TResponse, TError> {
         self.send::<TResponse, TError>("put").await
     }
 
-    pub async fn patch<TResponse: DeserializeOwned, TError: From<reqwest::Error>>(
+    pub async fn patch<TResponse: DeserializeOwned, TError: From<(reqwest::Error, String)>>(
         self,
     ) -> Result<TResponse, TError> {
         self.send::<TResponse, TError>("patch").await
     }
 
-    pub async fn post<TResponse: DeserializeOwned, TError: From<reqwest::Error>>(
+    pub async fn post<TResponse: DeserializeOwned, TError: From<(reqwest::Error, String)>>(
         self,
     ) -> Result<TResponse, TError> {
         self.send::<TResponse, TError>("post").await
     }
 
-    pub async fn post_no_response<TError: From<reqwest::Error>>(self) -> Result<(), TError> {
+    pub async fn post_no_response<TError: From<(reqwest::Error, String)>>(
+        self,
+    ) -> Result<(), TError> {
         self.send_no_response("post").await
     }
 
-    pub async fn get<TResponse: DeserializeOwned, TError: From<reqwest::Error>>(
+    pub async fn get<TResponse: DeserializeOwned, TError: From<(reqwest::Error, String)>>(
         self,
     ) -> Result<TResponse, TError> {
         self.send::<TResponse, TError>("get").await
     }
 
-    pub async fn delete_no_response<TError: From<reqwest::Error>>(self) -> Result<(), TError> {
+    pub async fn delete_no_response<TError: From<(reqwest::Error, String)>>(
+        self,
+    ) -> Result<(), TError> {
         self.send_no_response::<TError>("delete").await
     }
 
-    async fn send<TResponse: DeserializeOwned, TError: From<reqwest::Error>>(
+    async fn send<TResponse: DeserializeOwned, TError: From<(reqwest::Error, String)>>(
         self,
         method: &str,
     ) -> Result<TResponse, TError> {
+        let access_token = self.bearer_token.clone().unwrap_or_default();
         let request = self.build_request(method);
 
         request
             .send()
             .await
-            .map_err(|e| TError::from(e))?
+            .map_err(|e| TError::from((e, access_token.clone())))?
             .error_for_status()
-            .map_err(|e| TError::from(e))?
+            .map_err(|e| TError::from((e, access_token.clone())))?
             .json::<TResponse>()
             .await
-            .map_err(|e| TError::from(e))
+            .map_err(|e| TError::from((e, access_token)))
     }
-    async fn send_no_response<TError: From<reqwest::Error>>(
+    async fn send_no_response<TError: From<(reqwest::Error, String)>>(
         self,
         method: &str,
     ) -> Result<(), TError> {
+        let access_token = self.bearer_token.clone().unwrap_or_default();
         let request = self.build_request(method);
 
         request
             .send()
             .await
-            .map_err(|e| TError::from(e))?
+            .map_err(|e| TError::from((e, access_token.clone())))?
             .error_for_status()
-            .map_err(|e| TError::from(e))
+            .map_err(|e| TError::from((e, access_token)))
             .map(|_| ())
     }
 }

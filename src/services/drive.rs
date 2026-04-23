@@ -130,9 +130,10 @@ impl DriveService {
                 .iter()
                 .filter_map(|f| {
                     if let Some(val) = f.file.mime_type.as_ref()
-                        && val.eq("application/vnd.google-apps.folder") {
-                            return Some(val);
-                        }
+                        && val.eq("application/vnd.google-apps.folder")
+                    {
+                        return Some(val);
+                    }
                     None
                 })
                 .cloned()
@@ -193,6 +194,16 @@ impl DriveService {
             .await?;
 
         Ok(resp.files.into_iter().next())
+    }
+
+    pub async fn delete_object(
+        object_id: String,
+        access_token: String,
+    ) -> Result<(), CommonServiceError> {
+        HttpService::<()>::new(&format!("{}/{}", FILES_URL, object_id))
+            .auth(access_token)
+            .delete_no_response::<CommonServiceError>()
+            .await
     }
 
     pub async fn create_folder(
@@ -272,61 +283,6 @@ impl DriveService {
             .await
     }
 
-    pub fn ensure_folder_on_remote(
-        root_folder_id: String,
-        mut root_dir: PathBuf,
-        access_token: String,
-        local_folder_path: PathBuf,
-    ) -> Option<Task<Message>> {
-        if !local_folder_path.is_dir() {
-            return None;
-        }
-
-        let relative_path = local_folder_path.strip_prefix(&root_dir).unwrap();
-        let current_drive_id = root_folder_id;
-
-        let mut segments = vec![];
-        for segment in relative_path.components() {
-            if let std::path::Component::Normal(os_str) = segment {
-                root_dir = root_dir.join(os_str);
-                segments.push((root_dir.clone(), os_str.to_string_lossy().to_string()));
-            }
-        }
-
-        if segments.is_empty() {
-            return None;
-        }
-
-        // iter over the paths and either find or create them. Send UploadFinished so internal file_index can be updated
-        let tasks = unfold(
-            (current_drive_id, segments.into_iter(), access_token),
-            |(mut current_drive_id, mut iter, access_token)| async move {
-                let (path, folder_name) = iter.next()?;
-                let get_folder_result = Self::get_or_create_folder(
-                    current_drive_id.clone(),
-                    &access_token.clone(),
-                    &folder_name,
-                )
-                .await
-                .map_err(SyncError::from);
-
-                if let Ok(folder) = &get_folder_result {
-                    current_drive_id = folder.id.clone();
-                    let msg = Message::Sync(SyncMessage::UploadFinished {
-                        path,
-                        result: get_folder_result,
-                    });
-                    let next_state = (current_drive_id, iter, access_token);
-                    Some((msg, next_state))
-                } else {
-                    None
-                }
-            },
-        );
-
-        Some(Task::stream(tasks))
-    }
-
     pub async fn find_by_name(
         parent_id: &str,
         file_name: &str,
@@ -376,7 +332,8 @@ impl DriveService {
             .unwrap()
             .to_string_lossy()
             .to_string();
-        let bytes = std::fs::read(local_file_path).map_err(|e| SyncError::Io(format!("{}", e)))?;
+        let bytes = std::fs::read(&local_file_path)
+            .map_err(|e| SyncError::Io(format!("{} {}", local_file_path.display(), e)))?;
 
         let location = Self::start_resumable_create(&file_name, &parent_folder_id, &access_token)
             .await
@@ -466,18 +423,17 @@ impl DriveService {
         let mut url =
             Url::from_str(&format!("{FILES_URL}/{file_id}/revisions/{revision_id}")).unwrap();
         url.set_query(Some("alt=media"));
-
         let bytes = HTTP
             .get(url)
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(CommonServiceError::from)?
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?
             .error_for_status()
-            .map_err(CommonServiceError::from)?
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?
             .bytes()
             .await
-            .map_err(CommonServiceError::from)?;
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?;
 
         Ok(bytes.to_vec())
     }
@@ -506,9 +462,9 @@ impl DriveService {
             .json(&metadata)
             .send()
             .await
-            .map_err(CommonServiceError::from)?
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?
             .error_for_status()
-            .map_err(CommonServiceError::from)?;
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?;
 
         let location = response
             .headers()
@@ -541,9 +497,9 @@ impl DriveService {
             .body("{}")
             .send()
             .await
-            .map_err(CommonServiceError::from)?
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?
             .error_for_status()
-            .map_err(CommonServiceError::from)?;
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?;
 
         let location = response
             .headers()
@@ -568,12 +524,12 @@ impl DriveService {
             .body(bytes)
             .send()
             .await
-            .map_err(CommonServiceError::from)?
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?
             .error_for_status()
-            .map_err(CommonServiceError::from)?
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?
             .json::<DriveFile>()
             .await
-            .map_err(CommonServiceError::from)
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))
     }
 }
 

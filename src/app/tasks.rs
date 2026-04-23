@@ -6,9 +6,9 @@ use crate::{
     ArchiveClient,
     app::{
         self,
-        message::{Message, OrgMessage},
+        message::{Message, OrgMessage, SyncError, SyncMessage},
     },
-    services::{auth::AuthService, org::OrgService},
+    services::{auth::AuthService, org::OrgService, resolver::Resolver},
 };
 
 impl ArchiveClient {
@@ -94,5 +94,109 @@ impl ArchiveClient {
         Task::perform(future, |result| {
             Message::Sync(app::message::SyncMessage::InitialSyncCompleted { result, root_dir })
         })
+    }
+
+    pub fn upload_task(
+        path: PathBuf,
+        root_dir: PathBuf,
+        root_dir_id: String,
+        resolver: Resolver,
+        access_token: String,
+    ) -> Task<Message> {
+        let async_call = Self::upload(resolver, path.clone(), root_dir, root_dir_id, access_token);
+        Task::perform(async_call, |result| {
+            Message::Sync(SyncMessage::UploadFinished { path, result })
+        })
+    }
+
+    pub fn move_task(
+        from: PathBuf,
+        to: PathBuf,
+        root_dir: PathBuf,
+        root_dir_id: String,
+        resolver: Resolver,
+        access_token: String,
+    ) -> Task<Message> {
+        let move_async_call = Self::move_object(
+            from.clone(),
+            to.clone(),
+            resolver,
+            root_dir,
+            root_dir_id,
+            access_token,
+        );
+        Task::perform(move_async_call, |result| {
+            Message::Sync(SyncMessage::MoveFinished {
+                from_path: from,
+                to_path: to,
+                result,
+            })
+        })
+    }
+
+    pub fn move_then_upload_task(
+        from: PathBuf,
+        to: PathBuf,
+        root_dir: PathBuf,
+        root_dir_id: String,
+        resolver: Resolver,
+        access_token: String,
+    ) -> Task<Message> {
+        let move_async_call = Self::move_object(
+            from.clone(),
+            to.clone(),
+            resolver.clone(),
+            root_dir.clone(),
+            root_dir_id.clone(),
+            access_token.clone(),
+        );
+
+        let upload_async_call =
+            Self::upload(resolver, to.clone(), root_dir, root_dir_id, access_token);
+
+        Task::perform(
+            async move {
+                move_async_call.await?;
+                upload_async_call.await
+            },
+            |result| Message::Sync(SyncMessage::MoveThenUploadFinished { from, to, result }),
+        )
+    }
+
+    pub fn delete_task(
+        path: PathBuf,
+        root_dir_id: String,
+        resolver: Resolver,
+        access_token: String,
+    ) -> Task<Message> {
+        let async_call =
+            Self::delete_object_if_on_remote(path.clone(), resolver, root_dir_id, access_token);
+        Task::perform(async_call, |result: Result<bool, SyncError>| {
+            Message::Sync(SyncMessage::RemoveFinished {
+                path,
+                object_was_on_remote: result
+                    .as_ref()
+                    .map_or(false, |object_was_on_remote| *object_was_on_remote),
+                result: result.map(|_| ()),
+            })
+        })
+    }
+
+    pub fn ensure_folder_task(
+        path: PathBuf,
+        root_dir_id: String,
+        resolver: Resolver,
+        access_token: String,
+    ) -> Task<Message> {
+        let path_for_task = path.clone();
+        Task::perform(
+            async move {
+                resolver
+                    .resolve_and_create_missing_ancestors(path_for_task, root_dir_id, access_token)
+                    .await
+                    .map(|_| ())
+            },
+            |result| Message::Sync(SyncMessage::FolderEnsureFinished { path, result }),
+        )
     }
 }
