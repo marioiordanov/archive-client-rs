@@ -1,8 +1,5 @@
 use core::fmt;
-use std::{
-    collections::{HashMap},
-    path::PathBuf,
-};
+use std::{collections::HashMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -65,7 +62,7 @@ pub enum Intent {
 
 pub struct AppState {
     pub(crate) user_state: UserState,
-    pub (crate) pending_intents: Vec<Intent>,
+    pub(crate) pending_intents: Vec<Intent>,
     pub(crate) pending_refresh: bool,
 }
 

@@ -221,8 +221,10 @@ impl ArchiveClient {
                             .map(|dir| PathBuf::from(dir))
                             .filter(|_| org.status == app::state::OrgStatus::Ready)
                         {
-                            let resolver =
-                                Resolver::new(PathBuf::from(root_dir.clone()), FileIndex::load());
+                            let resolver = Resolver::new(
+                                PathBuf::from(root_dir.clone()),
+                                FileIndex::load(org.config.archive_folder_id.clone()),
+                            );
 
                             UserState::OrgSynced {
                                 resolver,

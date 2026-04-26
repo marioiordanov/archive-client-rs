@@ -25,12 +25,26 @@ impl Resolver {
         }
     }
 
+    pub(crate) async fn move_object_in_file_index(
+        &self,
+        _from: PathBuf,
+        to: PathBuf,
+        file_id: String,
+    ) {
+        let mut file_index = self.local_storage.write().await;
+
+        file_index.put_file_id(to, file_id);
+        file_index.reload_cache_by_path();
+    }
+
     pub(crate) async fn update_file_index(&self, path: PathBuf, file_id: String) {
         self.local_storage.write().await.put_file_id(path, file_id);
     }
 
-    pub(crate) async fn remove_from_file_index(&self, path: &PathBuf) {
-        self.local_storage.write().await.remove_path(path);
+    pub(crate) async fn remove_from_file_index(&self, path: PathBuf) {
+        let mut file_index = self.local_storage.write().await;
+        file_index.remove(path);
+        file_index.reload_cache_by_path();
     }
 
     pub(crate) async fn save_on_local(&self) {
@@ -125,7 +139,7 @@ impl Resolver {
             return Ok(root_dir_id);
         }
 
-        if let Some(file_id) = self.local_storage.read().await.get_file_id(&path) {
+        if let Some(file_id) = self.local_storage.read().await.get_file_id(path.clone()) {
             Ok(file_id.clone())
         } else {
             let mut ancestors = path
@@ -140,7 +154,12 @@ impl Resolver {
             // and dont use the last element which is the full path
             for parent in ancestors.iter().take(ancestors.len() - 1).skip(1) {
                 let current_path = self.root_dir.join(parent);
-                if let Some(file_id) = self.local_storage.read().await.get_file_id(&current_path) {
+                if let Some(file_id) = self
+                    .local_storage
+                    .read()
+                    .await
+                    .get_file_id(current_path.clone())
+                {
                     root_dir_id = file_id.clone();
                 } else {
                     let object_name = parent.file_name().unwrap().to_string_lossy().to_string(); // safe to use unwrap, because earlier we made sure that its not .. path via strip_prefix
@@ -151,7 +170,7 @@ impl Resolver {
                         self.local_storage
                             .write()
                             .await
-                            .put_file_id(current_path.clone(), file_id.file.id.clone());
+                            .put_file_id(current_path, file_id.file.id.clone());
                         root_dir_id = file_id.file.id;
                     } else {
                         return Err(SyncError::PathDoesNotExistOnRemote(current_path));

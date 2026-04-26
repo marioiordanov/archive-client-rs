@@ -5,7 +5,10 @@ use std::{
     sync::Arc,
 };
 
-use iced::{Task, futures::stream};
+use iced::{
+    Task,
+    futures::{StreamExt, stream},
+};
 
 use crate::{
     ArchiveClient, UserState,
@@ -237,10 +240,6 @@ impl ArchiveClient {
                 }
                 Task::none()
             }
-            (UserState::OrgSynced { resolver, .. }, _, SyncMessage::BatchCompleted) => {
-                resolver.try_save_on_local();
-                Task::none()
-            }
             _ => Task::none(),
         }
     }
@@ -268,7 +267,7 @@ impl ArchiveClient {
             Err(err) => Err(err),
         }?;
 
-        resolver.remove_from_file_index(&path).await;
+        resolver.remove_from_file_index(path).await;
 
         Ok(object_was_on_remote)
     }
@@ -340,7 +339,15 @@ impl ArchiveClient {
         if tasks.is_empty() {
             Task::none()
         } else {
-            Task::batch(tasks).chain(Task::done(Message::Sync(SyncMessage::BatchCompleted)))
+            // TODO: improve by grouping tasks that can be executed in parallel
+            tasks
+                .into_iter()
+                .reduce(|acc, task| acc.chain(task))
+                .unwrap_or(Task::none())
+                .chain(Task::perform(
+                    async move { resolver.save_on_local().await },
+                    |s| (Message::Sync(SyncMessage::BatchCompleted)),
+                ))
         }
     }
 
@@ -387,8 +394,9 @@ impl ArchiveClient {
                 .await
                 .map(|drive_file| drive_file.id)?;
 
-                resolver.remove_from_file_index(&from).await;
-                resolver.update_file_index(to, file_id.clone()).await;
+                resolver
+                    .move_object_in_file_index(from, to, file_id.clone())
+                    .await;
 
                 Ok(file_id)
             }
@@ -414,8 +422,7 @@ impl ArchiveClient {
         root_dir_id: String,
     ) -> Result<FileIndex, SyncError> {
         let actions = Self::walk_directory_to_actions_bfs(root_dir.as_path());
-        let mut file_index = FileIndex::default();
-        file_index.put_file_id(root_dir, root_dir_id);
+        let mut file_index = FileIndex::new(root_dir, root_dir_id);
 
         let parent_and_paths: Vec<(PathBuf, PathBuf, bool)> = actions
             .into_iter()
@@ -423,7 +430,7 @@ impl ArchiveClient {
             .collect();
 
         for (parent, path, is_folder) in parent_and_paths {
-            let parent_id = file_index.get_file_id(&parent).unwrap();
+            let parent_id = file_index.get_file_id(parent).unwrap();
             let folder_name = path
                 .file_name()
                 .ok_or(SyncError::Common(
@@ -540,9 +547,9 @@ impl ArchiveClient {
                     })?
                     .to_path_buf();
 
-                let index = FileIndex::load();
+                let index = FileIndex::load(org_id);
                 let file_id = index
-                    .get_file_id(&relative_path)
+                    .get_file_id(relative_path)
                     .ok_or_else(|| {
                         SyncError::InvalidLocalFolder(
                             "No Drive file id found for this file.".to_string(),
@@ -723,18 +730,15 @@ mod tests {
         let refresh = AuthService::refresh_access_token("REFRESH_TOKEN".into()).await.unwrap();
         let mut screen = OrgSyncScreen::new(None);
         let root_dir: PathBuf = "/Users/mario/Projects/archive-client-rs/test-folder".into();
-        let resolver = Resolver::new(root_dir.clone(), FileIndex::load());
+        let root_dir_id = "18NTDkndn_ESjsActq-6CRFUiMvfHTLWL".to_string();
+        let resolver = Resolver::new(root_dir.clone(), FileIndex::load(root_dir_id.clone()));
 
-        let task = ArchiveClient::move_object(
-            "/Users/mario/Projects/archive-client-rs/test-folder/mario/aaaa".into(),
-            "/Users/mario/Projects/archive-client-rs/test-folder/mario/c".into(),
-            resolver,
-            root_dir,
-            "18NTDkndn_ESjsActq-6CRFUiMvfHTLWL".into(),
-            refresh.access_token,
-        )
-        .await;
+        let r = ArchiveClient::initial_sync(refresh.access_token.clone(), root_dir.clone(), root_dir_id.clone()).await.unwrap();
 
-        println!("{task:?}");
+        let resolver = Resolver::new(root_dir, r);
+        let object_id = resolver.resolve_path("/Users/mario/Projects/archive-client-rs/test-folder/mario1".into(), root_dir_id, refresh.access_token).await.unwrap();
+
+        resolver.move_object_in_file_index("/Users/mario/Projects/archive-client-rs/test-folder/mario1".into(), "/Users/mario/Projects/archive-client-rs/test-folder/mario".into(), object_id).await;
+        resolver.save_on_local().await;
     }
 }
