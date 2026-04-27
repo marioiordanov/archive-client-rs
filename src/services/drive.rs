@@ -176,26 +176,6 @@ impl DriveService {
         Ok(all_folders)
     }
 
-    pub async fn find_child_folder(
-        parent_id: &str,
-        folder_name: &str,
-        access_token: &str,
-    ) -> Result<Option<DriveFileWithParent>, CommonServiceError> {
-        let query = format!(
-            "q='{}' in parents and trashed=false and mimeType='application/vnd.google-apps.folder' and name='{}'&fields=files(id,name,mimeType)",
-            parent_id,
-            escape_drive_query_string(folder_name)
-        );
-
-        let resp = HttpService::<()>::new(FILES_URL)
-            .auth(access_token)
-            .query(&query)
-            .get::<FileListResponse, CommonServiceError>()
-            .await?;
-
-        Ok(resp.files.into_iter().next())
-    }
-
     pub async fn delete_object(
         object_id: String,
         access_token: String,
@@ -226,39 +206,6 @@ impl DriveService {
         Ok(created)
     }
 
-    pub async fn ensure_remote_folder_path(
-        root_folder_id: &str,
-        path_segments: &[String],
-        access_token: &str,
-    ) -> Result<String, CommonServiceError> {
-        let mut current = root_folder_id.to_string();
-        for seg in path_segments {
-            let found = Self::find_child_folder(&current, seg, access_token).await?;
-            let folder = if let Some(folder) = found {
-                folder.file
-            } else {
-                Self::create_folder(&current, seg, access_token).await?
-            };
-            current = folder.id;
-        }
-        Ok(current)
-    }
-
-    async fn get_or_create_folder(
-        parent_id: String,
-        access_token: &str,
-        folder_name: &str,
-    ) -> Result<DriveFile, CommonServiceError> {
-        let found = Self::find_child_folder(&parent_id, folder_name, access_token).await?;
-        let folder = if let Some(folder) = found {
-            folder.file
-        } else {
-            Self::create_folder(&parent_id, folder_name, access_token).await?
-        };
-
-        Ok(folder)
-    }
-
     /// from: "f/sub/deep/deepest.txt"), to: path_buf("f/dd.txt"
     pub(crate) async fn move_object(
         object_drive_id: String,
@@ -277,7 +224,7 @@ impl DriveService {
             .auth(access_token)
             .json_body(MoveFileRequest { name: file_name })
             .query(&format!(
-                "removeParents='{old_parent_id}'&addParents='{new_parent_id}'"
+                "removeParents={old_parent_id}&addParents={new_parent_id}"
             ))
             .patch::<DriveFile, CommonServiceError>()
             .await
@@ -345,62 +292,6 @@ impl DriveService {
         Ok(created)
     }
 
-    pub async fn upload_local_file(
-        local_file_path: &Path,
-        drive_parent_folder_id: &str,
-        access_token: &str,
-    ) -> Result<DriveFile, SyncError> {
-        if !local_file_path.exists() {
-            return Err(SyncError::Io(format!(
-                "File missing: {}",
-                local_file_path.display()
-            )));
-        }
-        if !local_file_path.is_file() {
-            return Err(SyncError::Io(format!(
-                "Not a file: {}",
-                local_file_path.display()
-            )));
-        }
-
-        let file_name = local_file_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| SyncError::Io("Invalid filename (non-UTF8)".to_string()))?;
-
-        let bytes = std::fs::read(local_file_path).map_err(|e| SyncError::Io(format!("{}", e)))?;
-
-        let existing = Self::find_by_name(drive_parent_folder_id, file_name, access_token, false)
-            .await
-            .map_err(SyncError::from)?;
-
-        match existing {
-            Some(file) => {
-                println!("existing");
-                let location = Self::start_resumable_update(&file.file.id, access_token)
-                    .await
-                    .map_err(SyncError::from)?;
-                println!("location {location}");
-                let updated = Self::put_resumable_bytes(location, bytes, access_token)
-                    .await
-                    .map_err(SyncError::from)?;
-                Ok(updated)
-            }
-            None => {
-                println!("resumable");
-                let location =
-                    Self::start_resumable_create(file_name, drive_parent_folder_id, access_token)
-                        .await
-                        .map_err(SyncError::from)?;
-
-                let created = Self::put_resumable_bytes(location, bytes, access_token)
-                    .await
-                    .map_err(SyncError::from)?;
-                Ok(created)
-            }
-        }
-    }
-
     pub async fn list_revisions(
         file_id: &str,
         access_token: &str,
@@ -423,6 +314,7 @@ impl DriveService {
         let mut url =
             Url::from_str(&format!("{FILES_URL}/{file_id}/revisions/{revision_id}")).unwrap();
         url.set_query(Some("alt=media"));
+
         let bytes = HTTP
             .get(url)
             .bearer_auth(access_token)
@@ -554,6 +446,13 @@ mod tests {
             local_storage::LocalStorageService,
         },
     };
+
+    #[tokio::test]
+    async fn test_move_to_a_different_parent() {
+        let user:UserProfile = LocalStorageService::load_object(crate::services::local_storage::ObjectType::UserProfile).unwrap();
+        let refreshed_token = AuthService::refresh_access_token(&user.refresh_token).await.unwrap();
+        DriveService::move_object("1XyISJ-zBM17o_cy4qi8Q8l6L9rsWy5QG".into(), "18NTDkndn_ESjsActq-6CRFUiMvfHTLWL".into(), "12Zc7n6PqGbYal59tO2fKa-sE2iFR72V_".into(), refreshed_token.access_token, "xaa".into()).await.unwrap();
+    }
 
     #[test]
     fn get_all_folders() {
