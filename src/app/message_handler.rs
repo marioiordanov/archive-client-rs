@@ -33,6 +33,7 @@ impl ArchiveClient {
                 screen.update(msg);
                 Task::none()
             }
+            (_, _, Message::UnixSocket(cmd)) => self.handle_unix_socket_commands(cmd),
             (_, _, Message::Auth(auth_msg)) => self.handle_auth_messages(auth_msg),
             (user_state, _, Message::Org(org_msg))
                 if !matches!(user_state, UserState::SignedOut) =>

@@ -41,7 +41,7 @@ pub struct DriveFileWithParent {
     parent: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct DriveRevision {
     pub id: String,
     #[serde(rename = "modifiedTime")]

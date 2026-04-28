@@ -21,7 +21,7 @@ tokio = { version = "1.49.0", features = ["io-std", "io-util", "macros", "net"] 
 url = "2.5.8"
 warp = "0.4.2"
 webbrowser = { version = "1.0.6", features = ["hardened", "disable-wsl"] }
-fs_watcher = { git = "https://github.com/marioiordanov/fs_watcher", rev = "c9c271f"}
+fs_watcher = { git = "https://github.com/marioiordanov/fs_watcher", rev = "4980288"}
 
 [features]
 default = ["mock_org"]

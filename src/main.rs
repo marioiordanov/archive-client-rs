@@ -18,6 +18,7 @@ use crate::{
             AppState, Intent, OrgConfig, OrgState, Role, Screen, SessionState, UserData,
             UserProfile,
         },
+        subscriptions::unix_socket_server_subscription,
     },
     services::{file_index::FileIndex, local_storage::LocalStorageService, resolver::Resolver},
 };
@@ -336,12 +337,16 @@ impl ArchiveClient {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        match (&self.screen, &self.app.user_state) {
+        let fs_watch = match (&self.screen, &self.app.user_state) {
             (Screen::OrgSync(screen), UserState::OrgSynced { root_dir, .. }) if screen.watching => {
                 crate::app::subscriptions::fs_watch_subscription(root_dir.clone())
             }
             _ => Subscription::none(),
-        }
+        };
+
+        let unix = unix_socket_server_subscription();
+
+        Subscription::batch([fs_watch, unix])
     }
 }
 

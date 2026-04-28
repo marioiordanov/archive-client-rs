@@ -77,6 +77,10 @@ impl FileIndex {
         LocalStorageService::save_object(self, ObjectType::FileIndex);
     }
 
+    pub fn get_object_name(&self, object_id: &String) -> Option<&String>{
+        self.entries.get(object_id).map(|o| &o.name)
+    }
+
     pub fn get_file_id(&self, path: PathBuf) -> Option<&String> {
         let relative_path = self.get_relative_path(path);
         if relative_path.eq(Path::new("")) {
@@ -167,23 +171,43 @@ mod tests {
         let mut entries = HashMap::new();
         entries.insert(
             "id_1".to_string(),
-            IndexEntry { parent_id: "id_0".to_string(), name: "a".to_string(), is_dir: true },
+            IndexEntry {
+                parent_id: "id_0".to_string(),
+                name: "a".to_string(),
+                is_dir: true,
+            },
         );
         entries.insert(
             "id_2".to_string(),
-            IndexEntry { parent_id: "id_1".to_string(), name: "mario.txt".to_string(), is_dir: false },
+            IndexEntry {
+                parent_id: "id_1".to_string(),
+                name: "mario.txt".to_string(),
+                is_dir: false,
+            },
         );
         entries.insert(
             "id_3".to_string(),
-            IndexEntry { parent_id: "id_1".to_string(), name: "b".to_string(), is_dir: true },
+            IndexEntry {
+                parent_id: "id_1".to_string(),
+                name: "b".to_string(),
+                is_dir: true,
+            },
         );
         entries.insert(
             "id_4".to_string(),
-            IndexEntry { parent_id: "id_3".to_string(), name: "s.txt".to_string(), is_dir: false },
+            IndexEntry {
+                parent_id: "id_3".to_string(),
+                name: "s.txt".to_string(),
+                is_dir: false,
+            },
         );
         entries.insert(
             "id_5".to_string(),
-            IndexEntry { parent_id: "id_0".to_string(), name: "c.txt".to_string(), is_dir: false },
+            IndexEntry {
+                parent_id: "id_0".to_string(),
+                name: "c.txt".to_string(),
+                is_dir: false,
+            },
         );
 
         let mut index = FileIndex {
@@ -223,7 +247,7 @@ mod tests {
     #[case::ensure_rename_moves_a_file_to_different_folder("/root/dir/a/mario.txt", "/root/dir/mario.txt", vec!["/root/dir/mario.txt"])]
     #[case::ensure_rename_moves_a_file_to_different_folder("/root/dir/a/mario.txt", "/root/dir/a/b/mario.txt", vec!["/root/dir/a/b/mario.txt"])]
     #[case::ensure_rename_moves_a_folder_to_different_folder("/root/dir/a/b", "/root/dir/b", vec!["/root/dir/b", "/root/dir/b/s.txt"])]
-    fn test_rename(#[case] from: &str, #[case]to: &str, #[case]renamed_objects: Vec<&str>) {
+    fn test_rename(#[case] from: &str, #[case] to: &str, #[case] renamed_objects: Vec<&str>) {
         let mut index = setup();
 
         let from_id = index.get_file_id(PathBuf::from(from)).unwrap();
@@ -234,9 +258,12 @@ mod tests {
         index.reload_cache_by_path();
 
         for path in renamed_objects {
-            assert!(index.get_file_id(PathBuf::from(path)).map(|id| {
-                affected_ids.contains(id)
-            }).unwrap_or(false));
+            assert!(
+                index
+                    .get_file_id(PathBuf::from(path))
+                    .map(|id| { affected_ids.contains(id) })
+                    .unwrap_or(false)
+            );
         }
     }
 
@@ -245,7 +272,11 @@ mod tests {
         let mut affected = vec![object_id.clone()];
 
         while let Some(parent) = parents.pop() {
-            for (id, entry) in file_index.entries.iter().filter(|(_, e)| e.parent_id.eq(parent)) {
+            for (id, entry) in file_index
+                .entries
+                .iter()
+                .filter(|(_, e)| e.parent_id.eq(parent))
+            {
                 if entry.is_dir {
                     parents.push(id);
                 }
@@ -256,5 +287,4 @@ mod tests {
 
         affected
     }
-
 }

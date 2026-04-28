@@ -595,7 +595,7 @@ impl ArchiveClient {
 
                 if name_str.starts_with('.')
                     || name_str == ".DS_Store"
-                    || name_str.contains(" (archived ")
+                    || name_str.contains(" .archived ")
                 {
                     continue;
                 }

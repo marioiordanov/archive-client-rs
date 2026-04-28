@@ -1,27 +1,43 @@
 use hyper::StatusCode;
+use iced::futures::lock::Mutex;
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::{
-    screens,
-    services::{
+    app::handlers::external_commands::FileWithRevision, screens, services::{
         auth::{AccessTokenResponse, RefreshTokenResponse},
-        drive::DriveFile,
+        drive::{DriveFile, DriveRevision},
         file_index::FileIndex,
         org::{DashboardRowData, RootFolderEntry},
-    },
-    ui_error::{UiError, UiErrorKind},
+    }, ui_error::{UiError, UiErrorKind}
 };
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum Message {
     Screen(ScreenMessage),
     Auth(AuthMessage),
     Org(OrgMessage),
     Sync(SyncMessage),
+    UnixSocket(UnixSocketCommand),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
+pub enum UnixSocketCommand {
+    GetFileRevisions {
+        path: PathBuf,
+        sender: tokio::sync::oneshot::Sender<Vec<FileWithRevision>>,
+    },
+    DownloadFileAtPath {
+        file_id: String,
+        revision_id: String,
+        modified_time: String
+    },
+    UnixCommandCompleted {
+        success: bool,
+    },
+}
+
+#[derive(Debug)]
 pub enum ScreenMessage {
     Login(screens::signin::Message),
     OrgSelection(screens::org_selection::Message),
@@ -29,7 +45,7 @@ pub enum ScreenMessage {
     OrgSync(screens::org_sync::Message),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum OrgMessage {
     InvitationsLoaded(Result<Vec<crate::app::state::OrgInvitation>, OrgError>),
     OrgCreated(Result<RootFolderEntry, OrgError>),
@@ -214,7 +230,6 @@ impl From<(reqwest::Error, String)> for CommonServiceError {
                 StatusCode::UNAUTHORIZED => CommonServiceError::TokenExpired(access_token),
                 // If you have a more specific variant (e.g., PermissionDenied), map it here.
                 StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::BAD_REQUEST => {
-                    println!("{status}");
                     CommonServiceError::PermissionDenied
                 }
 
