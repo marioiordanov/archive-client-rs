@@ -628,7 +628,9 @@ impl<'a> EventsTransaction<'a> {
                     self.id_to_entry.insert(id, entry);
                 }
             }
-            _ => panic!("Impossible case"),
+            other => {
+                panic!("Impossible case {other:?}")
+            },
         }
     }
 

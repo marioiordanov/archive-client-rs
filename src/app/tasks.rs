@@ -6,9 +6,10 @@ use crate::{
     ArchiveClient,
     app::{
         self,
-        message::{Message, OrgMessage, SyncError, SyncMessage},
+        handlers::external_commands::FileWithRevision,
+        message::{CommonServiceError, Message, OrgMessage, SyncError, SyncMessage, UnixSocketCommand},
     },
-    services::{auth::AuthService, org::OrgService, resolver::Resolver},
+    services::{auth::AuthService, drive::DriveService, org::OrgService, resolver::Resolver},
 };
 
 impl ArchiveClient {
@@ -180,6 +181,78 @@ impl ArchiveClient {
                 result: result.map(|_| ()),
             })
         })
+    }
+
+    pub fn get_file_revisions_task(
+        path: PathBuf,
+        sender: Box<tokio::sync::oneshot::Sender<Vec<FileWithRevision>>>,
+        root_folder_id: String,
+        resolver: Resolver,
+        access_token: String,
+    ) -> Task<Message> {
+        Task::perform(
+            async move {
+                let id_result = resolver
+                    .resolve_path(path.clone(), root_folder_id, access_token.clone())
+                    .await
+                    .map_err(|e| match e {
+                        SyncError::Common(e) => e,
+                        other => CommonServiceError::Unknown(other.to_string()),
+                    });
+
+                let id = match id_result {
+                    Ok(id) => id,
+                    Err(e) => return Err((e, Box::new(UnixSocketCommand::GetFileRevisions { path, sender }))),
+                };
+
+                let revisions = match DriveService::list_revisions(&id, &access_token).await {
+                    Ok(r) => r.into_iter().map(|r| FileWithRevision::new(id.clone(), r)).collect(),
+                    Err(e) => return Err((e, Box::new(UnixSocketCommand::GetFileRevisions { path, sender }))),
+                };
+
+                sender.send(revisions);
+                Ok(())
+            },
+            |result| match result {
+                Ok(_) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted { command: None, error: None }),
+                Err((err, cmd)) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted { command: Some(cmd), error: Some(err) }),
+            },
+        )
+    }
+
+    pub fn download_file_at_path_task(
+        file_id: String,
+        revision_id: String,
+        modified_time: String,
+        resolver: Resolver,
+        root_dir: PathBuf,
+        access_token: String,
+    ) -> Task<Message> {
+        Task::perform(
+            async move {
+                if let Some(file_name) = resolver.get_object_name(&file_id).await {
+                    let file_contents = match DriveService::download_revision(&file_id, &revision_id, &access_token).await {
+                        Ok(c) => c,
+                        Err(e) => return Err((e, Box::new(UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time }))),
+                    };
+
+                    let file_name = format!("{modified_time}-{file_name}");
+                    let parent = root_dir.join(".archived");
+                    if !parent.exists() {
+                        tokio::fs::create_dir(&parent).await;
+                    }
+
+                    if let Err(e) = tokio::fs::write(parent.join(file_name), file_contents).await {
+                        return Err((CommonServiceError::Unknown(e.to_string()), Box::new(UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time })));
+                    }
+                }
+                Ok(())
+            },
+            |result| match result {
+                Ok(_) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted { command: None, error: None }),
+                Err((err, cmd)) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted { command: Some(cmd), error: Some(err) }),
+            },
+        )
     }
 
     pub fn ensure_folder_task(

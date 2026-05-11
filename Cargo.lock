@@ -1089,7 +1089,7 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 [[package]]
 name = "fs_watcher"
 version = "0.1.0"
-source = "git+https://github.com/marioiordanov/fs_watcher?rev=c9c271f#c9c271feef86210209e8c96a5f56c81f28f82a9a"
+source = "git+https://github.com/marioiordanov/fs_watcher?rev=37a88cb#37a88cb28a4497a72462b0a4b223001edd6be314"
 dependencies = [
  "tokio",
  "tokio-stream",

@@ -57,8 +57,12 @@ impl Resolver {
         }
     }
 
-    pub async fn get_object_name(&self, object_id: &String) -> Option<String>{
-        self.local_storage.read().await.get_object_name(object_id).cloned()
+    pub async fn get_object_name(&self, object_id: &String) -> Option<String> {
+        self.local_storage
+            .read()
+            .await
+            .get_object_name(object_id)
+            .cloned()
     }
 
     /// Resolves `path` to its Drive file ID, creating any missing ancestor folders along the way.

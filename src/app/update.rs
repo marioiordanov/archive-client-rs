@@ -5,7 +5,7 @@ use crate::{
     ArchiveClient, UserState,
     app::{
         self,
-        message::{GlobalError, Message, OrgMessage},
+        message::{GlobalError, Message, OrgMessage, UnixSocketCommand},
         state::{Intent, Screen},
     },
     screens::signin::SignInScreen,
@@ -146,6 +146,36 @@ impl ArchiveClient {
                 resolver.clone(),
                 user_data.access_token.clone(),
             ),
+            (
+                UserState::OrgSynced {
+                    resolver,
+                    root_folder_id,
+                    root_dir,
+                    user_data,
+                },
+                Intent::ExternalRequest { cmd },
+            ) => match cmd {
+                UnixSocketCommand::GetFileRevisions { path, sender } => {
+                    Self::get_file_revisions_task(
+                        path,
+                        sender,
+                        root_folder_id.clone(),
+                        resolver.clone(),
+                        user_data.access_token.clone(),
+                    )
+                }
+                UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time } => {
+                    Self::download_file_at_path_task(
+                        file_id,
+                        revision_id,
+                        modified_time,
+                        resolver.clone(),
+                        root_dir.clone(),
+                        user_data.access_token.clone(),
+                    )
+                }
+                _ => Task::none(),
+            },
             (user_state, intent) => {
                 warn!("impossible combination {user_state} {intent:?}");
                 Task::none()

@@ -77,7 +77,7 @@ impl FileIndex {
         LocalStorageService::save_object(self, ObjectType::FileIndex);
     }
 
-    pub fn get_object_name(&self, object_id: &String) -> Option<&String>{
+    pub fn get_object_name(&self, object_id: &String) -> Option<&String> {
         self.entries.get(object_id).map(|o| &o.name)
     }
 

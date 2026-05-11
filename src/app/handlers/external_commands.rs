@@ -1,23 +1,34 @@
-use std::{path::{Path, PathBuf}, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
+use http_body_util::BodyExt;
 use iced::Task;
 use serde::Serialize;
 
 use crate::{
     ArchiveClient, UserState,
-    app::message::{Message, UnixSocketCommand},
+    app::message::{CommonServiceError, Message, SyncError, UnixSocketCommand},
     services::drive::{DriveRevision, DriveService},
 };
 
 #[derive(Debug, Serialize)]
 pub struct FileWithRevision {
+    #[serde(rename = "fileId")]
     file_id: String,
     #[serde(flatten)]
-    revision: DriveRevision
+    revision: DriveRevision,
+}
+
+impl FileWithRevision {
+    pub fn new(file_id: String, revision: DriveRevision) -> Self {
+        Self { file_id, revision }
+    }
 }
 
 impl ArchiveClient {
-    pub fn handle_unix_socket_commands(&self, command: UnixSocketCommand) -> Task<Message> {
+    pub fn handle_unix_socket_commands(&mut self, command: UnixSocketCommand) -> Task<Message> {
         match (&self.app.user_state, command) {
             (
                 UserState::OrgSynced {
@@ -27,54 +38,45 @@ impl ArchiveClient {
                     ..
                 },
                 UnixSocketCommand::GetFileRevisions { path, sender },
-            ) => {
-                let access_token = user_data.access_token.clone();
-                let resolver = resolver.clone();
-                let root_folder_id = root_folder_id.clone();
-
-                Task::perform(
-                    async move {
-                        let id = resolver
-                            .resolve_path(path, root_folder_id.clone(), access_token.clone())
-                            .await
-                            .unwrap();
-                        let revisions = DriveService::list_revisions(&id, &access_token)
-                            .await
-                            .unwrap()
-                            .into_iter().map(|r| FileWithRevision {file_id: id.clone(), revision: r}).collect();
-                        sender.send(revisions);
-                    },
-                    |_| {
-                        Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
-                            success: true,
-                        })
-                    },
-                )
-            }
+            ) => ArchiveClient::get_file_revisions_task(
+                path,
+                sender,
+                root_folder_id.clone(),
+                resolver.clone(),
+                user_data.access_token.clone(),
+            ),
             (
-                UserState::OrgSynced { user_data, resolver, root_dir, .. },
+                UserState::OrgSynced {
+                    user_data,
+                    resolver,
+                    root_dir,
+                    ..
+                },
                 UnixSocketCommand::DownloadFileAtPath {
                     file_id,
                     revision_id,
-                    modified_time
+                    modified_time,
+                },
+            ) => ArchiveClient::download_file_at_path_task(
+                file_id,
+                revision_id,
+                modified_time,
+                resolver.clone(),
+                root_dir.clone(),
+                user_data.access_token.clone(),
+            ),
+            (
+                UserState::OrgSynced { .. },
+                UnixSocketCommand::UnixCommandCompleted {
+                    command: Some(cmd),
+                    error: Some(err),
                 },
             ) => {
-                let access_token = user_data.access_token.clone();
-                let resolver = resolver.clone();
-                let root_dir = root_dir.clone();
-                Task::perform(async move {
-                   if let Some(file_name) = resolver.get_object_name(&file_id).await {
-                        let file_contents = DriveService::download_revision(&file_id, &revision_id, &access_token).await.unwrap();
-                        let file_name = format!("{modified_time}-{file_name}");
-                        let parent = root_dir.join(".archived");
-                        if !parent.exists() {
-                            tokio::fs::create_dir(&parent).await;
-                        }
+                if matches!( err, CommonServiceError::TokenExpired(..)) {
+                    self.app.pending_intents.push(crate::app::state::Intent::ExternalRequest { cmd: *cmd });
+                }
 
-                        tokio::fs::write(parent.join(file_name), file_contents).await.unwrap();
-                   }
-
-                }, |_| Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted { success: true }))
+                self.handle_error(crate::app::message::GlobalError::Common(err))
             }
             _ => Task::none(),
         }

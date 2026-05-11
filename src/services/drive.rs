@@ -6,6 +6,7 @@ use std::{
 use iced::{Task, futures::stream::unfold};
 use reqwest::header;
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::json;
 use url::Url;
 
 use crate::{
@@ -313,6 +314,20 @@ impl DriveService {
     ) -> Result<Vec<u8>, CommonServiceError> {
         let mut url =
             Url::from_str(&format!("{FILES_URL}/{file_id}/revisions/{revision_id}")).unwrap();
+
+        HTTP.patch(url.clone())
+        .bearer_auth(access_token)
+        .json(&json!(
+            {
+                "keepForever": true
+            }
+        ))
+        .send()
+        .await
+        .map_err(|e| {
+                CommonServiceError::from((e, access_token.to_string()))
+            })?;
+
         url.set_query(Some("alt=media"));
 
         let bytes = HTTP
@@ -435,6 +450,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::json;
 
     use crate::{
         app::{message::CommonServiceError, state::UserProfile},
@@ -446,13 +462,6 @@ mod tests {
             local_storage::LocalStorageService,
         },
     };
-
-    #[tokio::test]
-    async fn test_move_to_a_different_parent() {
-        let user:UserProfile = LocalStorageService::load_object(crate::services::local_storage::ObjectType::UserProfile).unwrap();
-        let refreshed_token = AuthService::refresh_access_token(&user.refresh_token).await.unwrap();
-        DriveService::move_object("1XyISJ-zBM17o_cy4qi8Q8l6L9rsWy5QG".into(), "18NTDkndn_ESjsActq-6CRFUiMvfHTLWL".into(), "12Zc7n6PqGbYal59tO2fKa-sE2iFR72V_".into(), refreshed_token.access_token, "xaa".into()).await.unwrap();
-    }
 
     #[test]
     fn get_all_folders() {

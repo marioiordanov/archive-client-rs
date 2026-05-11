@@ -8,7 +8,8 @@ use iced::futures::{SinkExt, StreamExt};
 use iced::stream;
 use iced::{Subscription, Task};
 use log::warn;
-use tokio::net::{UnixListener, UnixSocket, UnixStream};
+use tokio::io::AsyncReadExt;
+use tokio::net::{TcpListener, UnixListener, UnixSocket, UnixStream};
 
 use crate::app::coalesce;
 use crate::app::fs_index::FsIndex;
@@ -22,49 +23,42 @@ pub fn fs_watch_subscription(root: PathBuf) -> Subscription<Message> {
     Subscription::run_with(root, fs_watch)
 }
 
-pub fn unix_socket_server_subscription() -> Subscription<Message> {
+pub fn tcp_server_subscription() -> Subscription<Message> {
     println!("unix server start watching");
-    Subscription::run(unix_socket_subscription)
+    Subscription::run(tcp_subscription)
 }
 
-pub fn unix_socket_subscription() -> iced::futures::stream::BoxStream<'static, Message> {
+pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> {
     stream::channel(
         10,
         move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
-
-            //let dir = temp_dir();
-            let socket_path = PathBuf::from(
-                "/Users/mario/Projects/archive-client-rs/app-data/archiveclient.sock",
-            );
-            std::fs::remove_file(&socket_path);
-            let listener = UnixListener::bind(socket_path).unwrap();
+            let listener = TcpListener::bind("127.0.0.1:8787").await.unwrap();
             loop {
                 match listener.accept().await {
                     Ok((mut stream, _)) => {
-                        let mut buf = vec![];
-                        if tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut buf)
-                            .await
-                            .ok()
-                            .is_some()
-                        {
+                        let msg_length = stream.read_u16_le().await.unwrap();
+                        let mut buf = vec![0u8; msg_length as usize];
+
+                        if stream.read_exact(&mut buf).await.ok().is_some() {
                             let msg = String::from_utf8(buf).unwrap();
+                            println!("{msg}");
                             let msg_parts: Vec<&str> = msg.split("@@").map(|s| s.trim()).collect();
                             let command = msg_parts.first().cloned();
-
                             match command {
                                 Some("revisions") if msg_parts.last().is_some() => {
-                                    let (tx, rx) =
-                                        tokio::sync::oneshot::channel();
+                                    let (tx, rx) = tokio::sync::oneshot::channel();
                                     let cmd = UnixSocketCommand::GetFileRevisions {
                                         path: msg_parts.last().unwrap().into(),
-                                        sender: tx,
+                                        sender: Box::new(tx),
                                     };
                                     output.send(Message::UnixSocket(cmd)).await;
 
                                     match rx.await {
                                         Ok(s) => {
                                             let b = serde_json::to_vec_pretty(&s).unwrap();
-                                            tokio::io::AsyncWriteExt::write(&mut stream, &b).await.unwrap();
+                                            tokio::io::AsyncWriteExt::write(&mut stream, &b)
+                                                .await
+                                                .unwrap();
                                         }
                                         Err(e) => {
                                             println!("{e}");
@@ -76,14 +70,20 @@ pub fn unix_socket_subscription() -> iced::futures::stream::BoxStream<'static, M
                                     let revision_id = msg_parts[2];
                                     let modified_time = msg_parts[3];
 
-                                    let cmd = UnixSocketCommand::DownloadFileAtPath { file_id:file_id.into(), revision_id: revision_id.into(), modified_time: modified_time.into() };
+                                    let cmd = UnixSocketCommand::DownloadFileAtPath {
+                                        file_id: file_id.into(),
+                                        revision_id: revision_id.into(),
+                                        modified_time: modified_time.into(),
+                                    };
 
                                     output.send(Message::UnixSocket(cmd)).await;
                                 }
                                 other @ _ => {
-                                    warn!("Unhandled case {other:?}");
+                                    println!("Unhandled case {other:?}");
                                 }
                             };
+                        } else {
+                            println!("not read to end");
                         }
                     }
                     other => {
@@ -105,7 +105,12 @@ fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Mes
         100,
         move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
             // scan root directory to obtain inodes of files/folders
-            let watcher = fs_watcher::AsyncWatcher::spawn(dir_root.as_path(), 0.5, &[&dir_root.join(".archived/").to_string_lossy().to_string()]).await;
+            let watcher = fs_watcher::AsyncWatcher::spawn(
+                dir_root.as_path(),
+                0.5,
+                &[&dir_root.join(".archived/").to_string_lossy().to_string()],
+            )
+            .await;
             let (mut w, mut events) = match watcher {
                 Ok(value) => value,
                 Err(e) => {

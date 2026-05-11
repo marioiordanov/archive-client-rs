@@ -4,9 +4,7 @@ use std::{collections::HashMap, path::PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    UserState,
-    screens::{self},
-    services::file_index::FileIndex,
+    UserState, app::message::UnixSocketCommand, screens::{self}, services::file_index::FileIndex
 };
 pub enum Screen {
     SignIn(screens::signin::SignInScreen),
@@ -26,7 +24,7 @@ impl fmt::Display for Screen {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive( Debug)]
 pub enum Intent {
     FetchInvitations,
     CreateOrg,
@@ -58,6 +56,9 @@ pub enum Intent {
     Remove {
         path: PathBuf,
     },
+    ExternalRequest {
+        cmd: UnixSocketCommand
+    }
 }
 
 pub struct AppState {

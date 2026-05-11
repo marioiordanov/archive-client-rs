@@ -18,7 +18,7 @@ use crate::{
             AppState, Intent, OrgConfig, OrgState, Role, Screen, SessionState, UserData,
             UserProfile,
         },
-        subscriptions::unix_socket_server_subscription,
+        subscriptions::tcp_server_subscription,
     },
     services::{file_index::FileIndex, local_storage::LocalStorageService, resolver::Resolver},
 };
@@ -344,7 +344,7 @@ impl ArchiveClient {
             _ => Subscription::none(),
         };
 
-        let unix = unix_socket_server_subscription();
+        let unix = tcp_server_subscription();
 
         Subscription::batch([fs_watch, unix])
     }

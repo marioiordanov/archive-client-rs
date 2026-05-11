@@ -4,12 +4,15 @@ use iced::futures::lock::Mutex;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::{
-    app::handlers::external_commands::FileWithRevision, screens, services::{
+    app::handlers::external_commands::FileWithRevision,
+    screens,
+    services::{
         auth::{AccessTokenResponse, RefreshTokenResponse},
         drive::{DriveFile, DriveRevision},
         file_index::FileIndex,
         org::{DashboardRowData, RootFolderEntry},
-    }, ui_error::{UiError, UiErrorKind}
+    },
+    ui_error::{UiError, UiErrorKind},
 };
 
 #[derive(Debug)]
@@ -25,15 +28,16 @@ pub enum Message {
 pub enum UnixSocketCommand {
     GetFileRevisions {
         path: PathBuf,
-        sender: tokio::sync::oneshot::Sender<Vec<FileWithRevision>>,
+        sender: Box<tokio::sync::oneshot::Sender<Vec<FileWithRevision>>>,
     },
     DownloadFileAtPath {
         file_id: String,
         revision_id: String,
-        modified_time: String
+        modified_time: String,
     },
     UnixCommandCompleted {
-        success: bool,
+        command: Option<Box<UnixSocketCommand>>,
+        error: Option<CommonServiceError>,
     },
 }
 
