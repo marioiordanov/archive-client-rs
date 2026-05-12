@@ -21,9 +21,7 @@ impl ArchiveClient {
                 )),
             ) => {
                 screen.update(msg);
-                let task = ArchiveClient::get_access_token_task();
-
-                Task::none()
+                ArchiveClient::get_access_token_task()
             }
             (
                 UserState::SignedOut,
@@ -299,7 +297,9 @@ impl ArchiveClient {
                     Task::none()
                 }
             }
-            _ => Task::none(),
+            other =>{
+                Task::none()
+            }
         }
     }
 }
