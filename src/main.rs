@@ -275,7 +275,8 @@ impl ArchiveClient {
 
                 (state, screen, next_task)
             }
-            (false, false) => (
+            (false, false) =>{
+                (
                 AppState {
                     user_state: UserState::SignedOut,
                     pending_intents: vec![],
@@ -283,29 +284,11 @@ impl ArchiveClient {
                 },
                 app::state::Screen::SignIn(screens::signin::SignInScreen::default()),
                 Task::none(),
-            ),
+            )},
             (false, true) => panic!("Impossible"),
         };
 
-        // TODO: fix later
-        let open_revision_task = parse_open_revision_request().map(|request| {
-            // ArchiveClient::open_revision_task(
-            //     state.org.config.archive_folder_id.clone(),
-            //     state.session.user.access_token.clone(),
-            //     state.org.config.local_folder_path.clone(),
-            //     request.local_path,
-            //     request.revision_id,
-            // )
-            Task::none()
-        });
-
-        let task = if let Some(task) = open_revision_task {
-            Task::batch(vec![next_task, task])
-        } else {
-            next_task
-        };
-
-        (Self { app: state, screen }, task)
+        (Self { app: state, screen }, next_task)
     }
 
     // update the UI
@@ -344,43 +327,11 @@ impl ArchiveClient {
             _ => Subscription::none(),
         };
 
-        let unix = tcp_server_subscription();
+        let unix = match self.app.user_state {
+            UserState::OrgSynced { .. } => tcp_server_subscription(),
+            _ => Subscription::none()
+        };
 
         Subscription::batch([fs_watch, unix])
     }
-}
-
-struct OpenRevisionRequest {
-    local_path: String,
-    revision_id: String,
-}
-
-fn parse_open_revision_request() -> Option<OpenRevisionRequest> {
-    for arg in std::env::args() {
-        if !arg.starts_with("archiveclient://") {
-            continue;
-        }
-
-        let url = Url::parse(&arg).ok()?;
-        if url.scheme() != "archiveclient" {
-            continue;
-        }
-
-        let is_open = url.host_str() == Some("open") || url.path() == "/open";
-        if !is_open {
-            continue;
-        }
-
-        let params: std::collections::HashMap<String, String> =
-            url.query_pairs().into_owned().collect();
-        let local_path = params.get("path")?.to_string();
-        let revision_id = params.get("revision")?.to_string();
-
-        return Some(OpenRevisionRequest {
-            local_path,
-            revision_id,
-        });
-    }
-
-    None
 }
