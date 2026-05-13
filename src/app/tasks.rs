@@ -65,6 +65,21 @@ impl ArchiveClient {
         )
     }
 
+    pub fn fetch_audit_log_task(
+        org_folder_id: String,
+        access_token: String,
+        page_token: Option<String>,
+    ) -> Task<Message> {
+        Task::perform(
+            async move {
+                DriveService::fetch_activity_log(&org_folder_id, &access_token, page_token)
+                    .await
+                    .map_err(app::message::OrgError::from)
+            },
+            |result| Message::Org(OrgMessage::AuditLogLoaded { result }),
+        )
+    }
+
     pub fn revoke_permission_task(
         folder_id: String,
         email: String,
@@ -227,13 +242,16 @@ impl ArchiveClient {
         resolver: Resolver,
         root_dir: PathBuf,
         access_token: String,
+        sender: Box<tokio::sync::oneshot::Sender<String>>,
     ) -> Task<Message> {
         Task::perform(
             async move {
                 if let Some(file_name) = resolver.get_object_name(&file_id).await {
                     let file_contents = match DriveService::download_revision(&file_id, &revision_id, &access_token).await {
                         Ok(c) => c,
-                        Err(e) => return Err((e, Box::new(UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time }))),
+                        Err(e) => {
+                            return Err((e, Box::new(UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time, sender })));
+                        }
                     };
 
                     let file_name = format!("{modified_time}-{file_name}");
@@ -242,9 +260,13 @@ impl ArchiveClient {
                         tokio::fs::create_dir(&parent).await;
                     }
 
-                    if let Err(e) = tokio::fs::write(parent.join(file_name), file_contents).await {
-                        return Err((CommonServiceError::Unknown(e.to_string()), Box::new(UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time })));
+                    let file_path = parent.join(&file_name);
+                    if let Err(e) = tokio::fs::write(&file_path, file_contents).await {
+                        return Err((CommonServiceError::Unknown(e.to_string()), Box::new(UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time, sender })));
                     }
+
+                    let _ = std::process::Command::new("open").args(["-R", &file_path.to_string_lossy()]).spawn();
+                    let _ = sender.send(file_path.to_string_lossy().into_owned());
                 }
                 Ok(())
             },

@@ -34,6 +34,7 @@ pub enum UnixSocketCommand {
         file_id: String,
         revision_id: String,
         modified_time: String,
+        sender: Box<tokio::sync::oneshot::Sender<String>>,
     },
     UnixCommandCompleted {
         command: Option<Box<UnixSocketCommand>>,
@@ -64,6 +65,12 @@ pub enum OrgMessage {
     PermissionRevoked {
         folder_id: String,
         result: Result<(), OrgError>,
+    },
+    AuditLogLoaded {
+        result: Result<
+            (Vec<crate::services::drive::Activity>, Option<String>),
+            OrgError,
+        >,
     },
 }
 

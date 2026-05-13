@@ -173,6 +173,17 @@ impl ArchiveClient {
                 Self::load_dashboard_task(org_id.clone(), access_token)
             }
             (
+                UserState::OrgCreated { org_id, user_data },
+                Screen::OrgDashboard(screen),
+                Message::Screen(ScreenMessage::OrgDashboard(
+                    msg @ screens::org_dashboard::Message::FetchAuditLogClicked,
+                )),
+            ) => {
+                let page_token = screen.audit_log_next_page.clone();
+                screen.update(msg);
+                Self::fetch_audit_log_task(org_id.clone(), user_data.access_token.clone(), page_token)
+            }
+            (
                 UserState::OrgCreated { user_data, .. },
                 Screen::OrgDashboard(screen),
                 Message::Screen(ScreenMessage::OrgDashboard(

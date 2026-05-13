@@ -1,4 +1,6 @@
 use std::{
+    collections::HashMap,
+    fmt,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -84,7 +86,7 @@ where
         .ok_or(serde::de::Error::custom("Unable to decode parent"))
 }
 
-#[derive(Deserialize, Debug, Serialize)]
+#[derive(Deserialize, Debug, Clone, Serialize)]
 pub(crate) struct FolderResponse {
     id: String,
     name: String,
@@ -95,7 +97,7 @@ pub(crate) struct FolderResponse {
     parent: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub(crate) struct FolderResponseList {
     files: Vec<FolderResponse>,
 }
@@ -438,11 +440,354 @@ impl DriveService {
             .await
             .map_err(|e| CommonServiceError::from((e, access_token.to_string())))
     }
+
+    pub async fn fetch_activity_log(
+        ancestor_id: &str,
+        access_token: &str,
+        page_token: Option<String>,
+    ) -> Result<(Vec<Activity>, Option<String>), CommonServiceError> {
+        use crate::constants::ACTIVITY_URL;
+
+        let mut body = json!({
+            "ancestorName": format!("items/{ancestor_id}"),
+            "pageSize": 20,
+            "consolidationStrategy": { "none": {} },
+        });
+
+        if let Some(token) = page_token {
+            body["pageToken"] = json!(token);
+        }
+
+        let resp = HTTP
+            .post(ACTIVITY_URL)
+            .bearer_auth(access_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?
+            .error_for_status()
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?
+            .json::<Activities>()
+            .await
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?;
+
+        Ok((resp.activities, resp.next_page_token))
+    }
 }
 
 fn escape_drive_query_string(value: &str) -> String {
     // Drive query strings use single quotes. Escape with backslash.
     value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub enum Detail {
+    Edit(Edit),
+    Create(Create),
+    Move(Move),
+    Rename(Rename),
+    Delete(Delete),
+    Restore(Restore),
+    PermissionChange(PermissionChange),
+    Comment(serde_json::Value),
+    DlpChange(serde_json::Value),
+    Reference(serde_json::Value),
+    SettingsChange(serde_json::Value),
+    AppliedLabelChange(serde_json::Value),
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Edit {}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Create {
+    // e.g. {"upload": {}} — another externally tagged enum
+    pub upload: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Move {
+    pub added_parents: Option<Vec<Parent>>,
+    pub removed_parents: Option<Vec<Parent>>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Parent {
+    pub drive_item: DriveItem,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveItem {
+    pub name: String,
+    pub title: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Delete {
+    #[serde(rename = "type")]
+    pub delete_type: String, // "PERMANENT_DELETE"
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Rename {
+    pub old_title: String,
+    pub new_title: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Restore {
+    #[serde(rename = "type")]
+    pub restore_type: String, // "UNTRASH"
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionChange {
+    pub added_permissions: Option<Vec<serde_json::Value>>,
+    pub removed_permissions: Option<Vec<serde_json::Value>>,
+}
+
+// --- Actor ---
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub enum Actor {
+    User(User),
+    Anonymous(serde_json::Value),
+    Impersonation(serde_json::Value),
+    System(serde_json::Value),
+    Administrator(serde_json::Value),
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub enum User {
+    KnownUser(KnownUser),
+    DeletedUser(serde_json::Value),
+    UnknownUser(serde_json::Value),
+}
+
+// V3 GoogleDrive API doesnt support multiple parents
+fn deserialize_person_name_by_stripping_prefix<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let person_name = String::deserialize(deserializer)?;
+    // its not possible for a file to not have parent
+    if let Some(stripped_name) = person_name.strip_prefix("people/") {
+        Ok(stripped_name.to_string())
+    }else {
+        Ok(person_name)
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownUser {
+    #[serde(deserialize_with = "deserialize_person_name_by_stripping_prefix")]
+    pub person_name: String,
+    pub is_current_user: Option<bool>,
+}
+
+// --- Target ---
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub enum Target {
+    DriveItem(TargetDriveItem),
+    Drive(Drive),
+    FileComment(serde_json::Value),
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetDriveItem {
+    pub name: String,
+    pub title: String,
+    pub mime_type: Option<String>,
+    pub owner: Option<serde_json::Value>,
+    pub drive_file: Option<serde_json::Value>,
+    pub drive_folder: Option<DriveFolder>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveFolder {
+    #[serde(rename = "type")]
+    pub folder_type: String, // "MY_DRIVE_ROOT" | "SHARED_DRIVE_ROOT" | "STANDARD_FOLDER"
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Drive {
+    pub name: String,
+    pub title: String,
+    pub root: Option<TargetDriveItem>,
+}
+
+// --- Display ---
+
+impl fmt::Display for Detail {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Detail::Edit(_) => write!(f, "edited"),
+            Detail::Create(c) => {
+                if c.upload.is_some() { write!(f, "uploaded") } else { write!(f, "created") }
+            }
+            Detail::Move(m) => {
+                let from = m.removed_parents.as_deref()
+                    .and_then(|v| v.first())
+                    .map(|p| p.drive_item.title.as_str());
+                let to = m.added_parents.as_deref()
+                    .and_then(|v| v.first())
+                    .map(|p| p.drive_item.title.as_str());
+                match (from, to) {
+                    (Some(f_), Some(t)) => write!(f, "moved from \"{f_}\" to \"{t}\""),
+                    (Some(f_), None)    => write!(f, "moved out of \"{f_}\""),
+                    (None,    Some(t))  => write!(f, "moved to \"{t}\""),
+                    (None,    None)     => write!(f, "moved"),
+                }
+            }
+            Detail::Rename(r) => write!(f, "renamed \"{}\" → \"{}\"", r.old_title, r.new_title),
+            Detail::Delete(d) => {
+                if d.delete_type == "PERMANENT_DELETE" {
+                    write!(f, "permanently deleted")
+                } else {
+                    write!(f, "deleted")
+                }
+            }
+            Detail::Restore(_) => write!(f, "restored"),
+            Detail::PermissionChange(p) => {
+                let added = p.added_permissions.as_deref().map(|v| v.len()).unwrap_or(0);
+                let removed = p.removed_permissions.as_deref().map(|v| v.len()).unwrap_or(0);
+                match (added, removed) {
+                    (a, 0) => write!(f, "granted {a} permission(s)"),
+                    (0, r) => write!(f, "revoked {r} permission(s)"),
+                    (a, r) => write!(f, "changed permissions (+{a}/-{r})"),
+                }
+            }
+            Detail::Comment(_)           => write!(f, "commented"),
+            Detail::DlpChange(_)         => write!(f, "triggered DLP change"),
+            Detail::Reference(_)         => write!(f, "referenced in external app"),
+            Detail::SettingsChange(_)    => write!(f, "changed settings"),
+            Detail::AppliedLabelChange(_) => write!(f, "changed label"),
+        }
+    }
+}
+
+impl fmt::Display for Actor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Actor::User(u) => write!(f, "{u}"),
+            Actor::Anonymous(_)    => write!(f, "anonymous user"),
+            Actor::Impersonation(_) => write!(f, "impersonator"),
+            Actor::System(_)       => write!(f, "system"),
+            Actor::Administrator(_) => write!(f, "administrator"),
+        }
+    }
+}
+
+impl fmt::Display for User {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            User::KnownUser(k) => {
+                if k.is_current_user.unwrap_or(false) {
+                    write!(f, "you")
+                } else {
+                    // person_name is "people/<id>"; show the id portion
+                    let name = k.person_name.strip_prefix("people/").unwrap_or(&k.person_name);
+                    write!(f, "user:{name}")
+                }
+            }
+            User::DeletedUser(_)  => write!(f, "deleted user"),
+            User::UnknownUser(_)  => write!(f, "unknown user"),
+        }
+    }
+}
+
+impl fmt::Display for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Target::DriveItem(i)   => write!(f, "\"{}\"", i.title),
+            Target::Drive(d)       => write!(f, "drive \"{}\"", d.title),
+            Target::FileComment(_) => write!(f, "a file comment"),
+        }
+    }
+}
+
+impl fmt::Display for Activity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // who
+        let actors = if self.actors.is_empty() {
+            "unknown".to_string()
+        } else {
+            self.actors.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ")
+        };
+
+        // what
+        let action = &self.primary_action_detail;
+
+        // which files
+        let targets = if self.targets.is_empty() {
+            "unknown target".to_string()
+        } else {
+            self.targets.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")
+        };
+
+        write!(f, "[{}] {} {} {}", self.time, actors, action, targets)
+    }
+}
+
+impl fmt::Display for ActivityTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ActivityTime::Timestamp(ts) => write!(f, "{ts}"),
+            ActivityTime::TimeRange(r)  => write!(f, "{} – {}", r.start_time, r.end_time),
+        }
+    }
+}
+
+// --- Action ---
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Action {
+    pub detail: Detail,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub enum ActivityTime {
+    Timestamp(String),
+    TimeRange(TimeRange),
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeRange {
+    pub start_time: String,
+    pub end_time: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Activity {
+    pub primary_action_detail: Detail,
+    pub actors: Vec<Actor>,
+    pub targets: Vec<Target>,
+    #[serde(flatten)]
+    pub time: ActivityTime,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Activities {
+    pub activities: Vec<Activity>,
+    pub next_page_token: Option<String>,
 }
 
 #[cfg(test)]

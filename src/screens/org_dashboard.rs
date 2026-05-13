@@ -1,11 +1,11 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::table;
 use iced::widget::{button, column, container, row, scrollable, text, text_editor, tooltip};
 use iced::{Alignment, Border, Color, Element, Length, Theme};
 
-use crate::app::message::ScreenMessage;
+use crate::{app::message::ScreenMessage, services::drive::Activity};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -41,6 +41,12 @@ pub enum Message {
     AddRow {
         row: DashboardRow,
     },
+    FetchAuditLogClicked,
+    AuditLogLoaded {
+        entries: Vec<Activity>,
+        next_page_token: Option<String>,
+    },
+    AuditLogError(String),
 }
 
 impl From<Message> for ScreenMessage {
@@ -87,6 +93,12 @@ pub struct OrgDashboardScreen {
     invite_queue: VecDeque<String>,
     invite_current_email: Option<String>,
     invite_history: Vec<InviteHistoryRow>,
+
+    // Audit log panel
+    pub audit_log_entries: Vec<Activity>,
+    pub audit_log_next_page: Option<String>,
+    audit_log_loading: bool,
+    audit_log_error: Option<String>,
 }
 
 impl OrgDashboardScreen {
@@ -104,6 +116,11 @@ impl OrgDashboardScreen {
             invite_queue: VecDeque::new(),
             invite_current_email: None,
             invite_history: Vec::new(),
+
+            audit_log_entries: Vec::new(),
+            audit_log_next_page: None,
+            audit_log_loading: false,
+            audit_log_error: None,
         }
     }
 
@@ -177,6 +194,19 @@ impl OrgDashboardScreen {
             }
             Message::AddRow { row } => {
                 self.rows.push(row);
+            }
+            Message::FetchAuditLogClicked => {
+                self.audit_log_loading = true;
+                self.audit_log_error = None;
+            }
+            Message::AuditLogLoaded { entries, next_page_token } => {
+                self.audit_log_entries.extend(entries);
+                self.audit_log_next_page = next_page_token;
+                self.audit_log_loading = false;
+            }
+            Message::AuditLogError(e) => {
+                self.audit_log_loading = false;
+                self.audit_log_error = Some(e);
             }
         }
     }
@@ -285,6 +315,8 @@ impl OrgDashboardScreen {
         .padding(12)
         .on_press(Message::RefreshClicked);
 
+        let audit_log_panel = render_audit_log_panel(self);
+
         let status_line: Element<Message> = if let Some(err) = &self.error {
             text(format!("Error: {err}")).size(12).into()
         } else if self.loading {
@@ -318,6 +350,7 @@ impl OrgDashboardScreen {
             invite_panel,
             status_line,
             table_panel,
+            audit_log_panel,
         ]
         .spacing(12)
         .width(Length::Fill)
@@ -486,6 +519,112 @@ fn render_invite_history(history: &[InviteHistoryRow]) -> Element<'_, Message> {
         .padding_y(6)
         .separator(1)
         .into()
+}
+
+fn format_activity(activity: &Activity, people: &HashMap<String, String>) -> String {
+    use crate::services::drive::{Actor, User};
+
+    let actors = if activity.actors.is_empty() {
+        "unknown".to_string()
+    } else {
+        activity
+            .actors
+            .iter()
+            .map(|actor| match actor {
+                Actor::User(User::KnownUser(k)) => {
+                    if k.is_current_user.unwrap_or(false) {
+                        "you".to_string()
+                    } else {
+                        people
+                            .get(&k.person_name)
+                            .cloned()
+                            .unwrap_or_else(|| k.person_name.clone())
+                    }
+                }
+                _ => actor.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let targets = if activity.targets.is_empty() {
+        "unknown target".to_string()
+    } else {
+        activity
+            .targets
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    format!("[{}] {} {} {}", activity.time, actors, activity.primary_action_detail, targets)
+}
+
+fn render_audit_log_panel(screen: &OrgDashboardScreen) -> Element<'_, Message> {
+    let panel_style = |theme: &Theme| {
+        let palette = theme.extended_palette();
+        container::Style {
+            border: Border {
+                color: palette.background.strong.color,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        }
+    };
+
+    let mut fetch_button = button(if screen.audit_log_loading {
+        "Loading…"
+    } else if screen.audit_log_entries.is_empty() {
+        "Load audit log"
+    } else {
+        "Load more"
+    })
+    .padding(10);
+
+    if !screen.audit_log_loading && screen.audit_log_next_page.is_some()
+        || screen.audit_log_entries.is_empty() && !screen.audit_log_loading
+    {
+        fetch_button = fetch_button.on_press(Message::FetchAuditLogClicked);
+    }
+
+    let status: Element<Message> = if let Some(err) = &screen.audit_log_error {
+        text(format!("Error: {err}")).size(11).into()
+    } else {
+        text("").into()
+    };
+
+    let log_content: Element<Message> = if screen.audit_log_entries.is_empty() {
+        text("No entries loaded yet.").size(12).into()
+    } else {
+        let rows = screen
+            .audit_log_entries
+            .iter()
+            .map(|activity| {
+                text(activity.to_string())
+                    .size(12)
+                    .into()
+            })
+            .collect::<Vec<Element<Message>>>();
+
+        column(rows).spacing(4).into()
+    };
+
+    let log_box = container(scrollable(log_content).width(Length::Fill))
+        .padding(10)
+        .height(Length::Fixed(240.0))
+        .width(Length::Fill)
+        .style(panel_style);
+
+    column![
+        fetch_button,
+        log_box,
+        row![status].spacing(10).align_y(Alignment::Center),
+    ]
+    .spacing(10)
+    .width(Length::Fill)
+    .into()
 }
 
 fn parse_emails(input: &str) -> Vec<String> {

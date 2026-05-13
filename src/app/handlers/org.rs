@@ -105,6 +105,25 @@ impl ArchiveClient {
                 },
             ) => Self::on_permission_revoked_err(screen, folder_id, e),
 
+            (
+                UserState::OrgCreated { .. },
+                Screen::OrgDashboard(screen),
+                OrgMessage::AuditLogLoaded { result: Ok((entries, next_page_token)) },
+            ) => {
+                screen.update(screens::org_dashboard::Message::AuditLogLoaded {
+                    entries,
+                    next_page_token,
+                });
+                Task::none()
+            }
+            (
+                UserState::OrgCreated { .. },
+                Screen::OrgDashboard(screen),
+                OrgMessage::AuditLogLoaded { result: Err(e) },
+            ) => {
+                screen.update(screens::org_dashboard::Message::AuditLogError(e.to_string()));
+                Task::none()
+            }
             (UserState::OrgCreated { .. }, _, OrgMessage::OrgCreated(Err(e)))
             | (UserState::OrgCreated { .. }, _, OrgMessage::DashboardLoaded(Err(e)))
             | (UserState::SignedIn { .. }, _, OrgMessage::InvitationsLoaded(Err(e)))
@@ -134,17 +153,14 @@ impl ArchiveClient {
         root_folder_entry: services::org::RootFolderEntry,
         access_token: String,
     ) -> Task<Message> {
-        LocalStorageService::update_object::<OrgState, _>(
-            services::local_storage::ObjectType::Org,
-            |org| {
-                org.status = app::state::OrgStatus::Created;
-                org.config = app::state::OrgConfig {
+        LocalStorageService::save_object(&OrgState {
+            status: app::state::OrgStatus::Created,
+            config: app::state::OrgConfig {
                     archive_folder_id: root_folder_entry.id.clone(),
                     archive_folder_name: root_folder_entry.name,
                     local_folder_path: None,
                 }
-            },
-        );
+            }, services::local_storage::ObjectType::Org);
 
         LocalStorageService::update_object::<UserProfile, _>(
             services::local_storage::ObjectType::UserProfile,
