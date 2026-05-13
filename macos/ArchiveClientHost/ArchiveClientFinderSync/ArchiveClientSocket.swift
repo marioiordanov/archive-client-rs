@@ -24,9 +24,13 @@ class ArchiveSocketClient {
         }
     }
     
-    func downloadFile(file_with_revision: FileWithRevision) {
+    func downloadFile(file_with_revision: FileWithRevision, completion: @escaping (String?) -> Void) {
         DispatchQueue.global().async {
-            self.sendReceive("download@@\(file_with_revision.fileId)@@\(file_with_revision.id)@@\(file_with_revision.modifiedTime)")
+            guard let data = self.sendReceive("download@@\(file_with_revision.fileId)@@\(file_with_revision.id)@@\(file_with_revision.modifiedTime)") else {
+                completion(nil)
+                return
+            }
+            completion(String(data: data, encoding: .utf8))
         }
     }
 

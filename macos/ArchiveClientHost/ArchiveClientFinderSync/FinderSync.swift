@@ -33,6 +33,8 @@ class FinderSync: FIFinderSync {
             return menu
         }
 
+        guard !fileURL.pathComponents.contains(".archived") else { return nil }
+
         print(selected)
 
         let revisionsItem = NSMenuItem(title: "Archived Versions", action: nil, keyEquivalent: "")
@@ -61,7 +63,6 @@ class FinderSync: FIFinderSync {
                 action: #selector(refreshRevisions(_:)),
                 keyEquivalent: ""
             )
-            print("refresh path", fileURL.path)
             submenu.addItem(refresh)
 
         } else {
@@ -89,11 +90,10 @@ class FinderSync: FIFinderSync {
     }
 
     @objc func openRevision(_ sender: NSMenuItem) {
-
         guard let path = FIFinderSyncController.default().selectedItemURLs()?.first?.path else { return }
         guard let file_with_revision = self.cache.getRevision(tag: sender.tag, path: path) else { return }
         let client = ArchiveSocketClient()
-        client.downloadFile(file_with_revision: file_with_revision)
+        client.downloadFile(file_with_revision: file_with_revision) { _ in }
     }
 
     @objc func refreshRevisions(_ sender: NSMenuItem) {
