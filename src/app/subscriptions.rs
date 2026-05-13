@@ -41,7 +41,6 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
 
                         if stream.read_exact(&mut buf).await.ok().is_some() {
                             let msg = String::from_utf8(buf).unwrap();
-                            println!("{msg}");
                             let msg_parts: Vec<&str> = msg.split("@@").map(|s| s.trim()).collect();
                             let command = msg_parts.first().cloned();
                             match command {
@@ -70,13 +69,19 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                     let revision_id = msg_parts[2];
                                     let modified_time = msg_parts[3];
 
+                                    let (tx, rx) = tokio::sync::oneshot::channel();
                                     let cmd = UnixSocketCommand::DownloadFileAtPath {
                                         file_id: file_id.into(),
                                         revision_id: revision_id.into(),
                                         modified_time: modified_time.into(),
+                                        sender: Box::new(tx),
                                     };
 
                                     output.send(Message::UnixSocket(cmd)).await;
+
+                                    if let Ok(path) = rx.await {
+                                        let _ = tokio::io::AsyncWriteExt::write(&mut stream, path.as_bytes()).await;
+                                    }
                                 }
                                 other @ _ => {
                                     println!("Unhandled case {other:?}");

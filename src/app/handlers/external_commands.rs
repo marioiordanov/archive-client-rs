@@ -56,6 +56,7 @@ impl ArchiveClient {
                     file_id,
                     revision_id,
                     modified_time,
+                    sender,
                 },
             ) => ArchiveClient::download_file_at_path_task(
                 file_id,
@@ -64,6 +65,7 @@ impl ArchiveClient {
                 resolver.clone(),
                 root_dir.clone(),
                 user_data.access_token.clone(),
+                sender,
             ),
             (
                 UserState::OrgSynced { .. },

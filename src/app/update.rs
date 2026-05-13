@@ -164,7 +164,7 @@ impl ArchiveClient {
                         user_data.access_token.clone(),
                     )
                 }
-                UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time } => {
+                UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time, sender } => {
                     Self::download_file_at_path_task(
                         file_id,
                         revision_id,
@@ -172,6 +172,7 @@ impl ArchiveClient {
                         resolver.clone(),
                         root_dir.clone(),
                         user_data.access_token.clone(),
+                        sender,
                     )
                 }
                 _ => Task::none(),
@@ -194,7 +195,6 @@ impl ArchiveClient {
                     | crate::UserState::OrgSynced { user_data, .. } => {
                         if user_data.access_token == expired_token {
                             if self.app.pending_refresh {
-                                println!("refresh is requested");
                                 Task::none()
                             } else {
                                 let refresh_token = user_data.refresh_token.clone();
@@ -224,7 +224,6 @@ impl ArchiveClient {
 
     // changes the state, switch screen if needed
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        println!("{message:?}");
         self.handle_message(message)
     }
 }
