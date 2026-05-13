@@ -321,7 +321,7 @@ impl ArchiveClient {
 
     fn subscription(&self) -> Subscription<Message> {
         let fs_watch = match (&self.screen, &self.app.user_state) {
-            (Screen::OrgSync(screen), UserState::OrgSynced { root_dir, .. }) if screen.watching => {
+            (Screen::OrgSync(screen), UserState::OrgSynced { root_dir, .. }) => {
                 crate::app::subscriptions::fs_watch_subscription(root_dir.clone())
             }
             _ => Subscription::none(),

@@ -75,9 +75,11 @@ impl ArchiveClient {
                 let mut org = LocalStorageService::load_object::<OrgState>(ObjectType::Org)
                     .unwrap_or_default();
                 org.status = crate::app::state::OrgStatus::Created;
-                org.config.archive_folder_id = org_id;
+                org.config.archive_folder_id = org_id.clone();
                 org.config.archive_folder_name = org_name;
                 LocalStorageService::save_object(&org, ObjectType::Org);
+
+                self.app.user_state.org_joined(org_id);
 
                 LocalStorageService::update_object::<UserProfile, _>(
                     ObjectType::UserProfile,
@@ -231,16 +233,6 @@ impl ArchiveClient {
                 UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
                 Screen::OrgSync(screen),
                 Message::Screen(ScreenMessage::OrgSync(
-                    msg @ screens::org_sync::Message::StopWatchingClicked,
-                )),
-            ) => {
-                screen.update(msg);
-                Task::none()
-            }
-            (
-                UserState::OrgJoined { .. } | UserState::OrgSynced { .. },
-                Screen::OrgSync(screen),
-                Message::Screen(ScreenMessage::OrgSync(
                     msg @ screens::org_sync::Message::SaveMappingClicked,
                 )),
             ) => {
@@ -267,33 +259,56 @@ impl ArchiveClient {
                 Task::none()
             }
             (
+                _,
+                Screen::OrgSync(_),
+                Message::Screen(ScreenMessage::OrgSync(
+                    screens::org_sync::Message::BrowseFolderClicked,
+                )),
+            ) => Task::perform(
+                async {
+                    tokio::task::spawn_blocking(|| {
+                        let out = std::process::Command::new("osascript")
+                            .args(["-e", "POSIX path of (choose folder)"])
+                            .output()
+                            .ok()?;
+                        out.status.success()
+                            .then(|| String::from_utf8(out.stdout).ok())
+                            .flatten()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                },
+                |path| {
+                    Message::Screen(ScreenMessage::OrgSync(
+                        screens::org_sync::Message::FolderSelected(path),
+                    ))
+                },
+            ),
+            (
                 user_state @ (UserState::OrgJoined { .. } | UserState::OrgSynced { .. }),
                 Screen::OrgSync(screen),
                 Message::Screen(ScreenMessage::OrgSync(
-                    msg @ screens::org_sync::Message::StartWatchingClicked,
+                    screens::org_sync::Message::FolderSelected(Some(path)),
                 )),
             ) => {
-                // Best-effort: auto-save mapping if it's valid.
-                let input = screen.local_folder_input.trim().to_string();
-                let path = std::path::PathBuf::from(&input);
-                if input.is_empty() || !path.exists() || !path.is_dir() {
-                    screen.status_line = Some("Set a valid local folder path first.".to_string());
-                    screen.watching = false;
+                println!("folder selected");
+                let path_buf = std::path::PathBuf::from(&path);
+                if !path_buf.exists() || !path_buf.is_dir() {
                     return Task::none();
                 }
 
-                let mut org = LocalStorageService::load_object::<OrgState>(ObjectType::Org)
-                    .unwrap_or_default();
+                screen.update(screens::org_sync::Message::FolderSelected(Some(path.clone())));
 
-                if org.config.local_folder_path.as_deref() != Some(&input) {
-                    org.config.local_folder_path = Some(input.clone());
-                    screen.mapped_folder = Some(input);
-                    LocalStorageService::save_object(&org, ObjectType::Org);
-                }
+                LocalStorageService::update_object::<OrgState, _>(ObjectType::Org, |org| {
+                    org.config.local_folder_path = Some(path.clone());
+                });
 
-                screen.update(msg);
+                let _ = std::process::Command::new("open").arg(&path).spawn();
 
-                if let UserState::OrgJoined {
+                let watch_task = if let UserState::OrgJoined {
                     root_folder_id,
                     user_data,
                     ..
@@ -301,14 +316,29 @@ impl ArchiveClient {
                 {
                     Self::initial_sync_task(
                         user_data.access_token.clone(),
-                        path,
+                        path_buf,
                         root_folder_id.clone(),
                     )
                 } else {
                     Task::none()
-                }
+                };
+
+                let minimize_task = iced::window::latest().then(|maybe_id| {
+                    maybe_id
+                        .map(|id| iced::window::minimize::<Message>(id, true))
+                        .unwrap_or(Task::none())
+                });
+
+                Task::batch([watch_task, minimize_task])
             }
-            other =>{
+            (
+                _,
+                Screen::OrgSync(_),
+                Message::Screen(ScreenMessage::OrgSync(
+                    screens::org_sync::Message::FolderSelected(None),
+                )),
+            ) => Task::none(),
+            other => {
                 Task::none()
             }
         }

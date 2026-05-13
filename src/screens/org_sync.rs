@@ -8,9 +8,9 @@ use crate::app::message::ScreenMessage;
 pub enum Message {
     LocalFolderChanged(String),
     SaveMappingClicked,
-    StartWatchingClicked,
-    StopWatchingClicked,
     ClearLogClicked,
+    BrowseFolderClicked,
+    FolderSelected(Option<String>),
 }
 
 impl From<Message> for ScreenMessage {
@@ -24,7 +24,6 @@ pub struct OrgSyncScreen {
     pub local_folder_input: String,
 
     pub mapped_folder: Option<String>,
-    pub watching: bool,
 
     pub status_line: Option<String>,
     pub upload_log: Vec<String>,
@@ -35,7 +34,6 @@ impl OrgSyncScreen {
         Self {
             local_folder_input: mapped_folder.clone().unwrap_or_default(),
             mapped_folder,
-            watching: false,
             status_line: None,
             upload_log: Vec::new(),
         }
@@ -50,17 +48,14 @@ impl OrgSyncScreen {
                 // handled by app; keep UI responsive
                 self.status_line = Some("Mapping saved.".to_string());
             }
-            Message::StartWatchingClicked => {
-                self.watching = true;
-                self.status_line = Some("Watching for changes…".to_string());
-            }
-            Message::StopWatchingClicked => {
-                self.watching = false;
-                self.status_line = Some("Watcher stopped.".to_string());
-            }
             Message::ClearLogClicked => {
                 self.upload_log.clear();
             }
+            Message::FolderSelected(Some(path)) => {
+                self.local_folder_input = path.clone();
+                self.mapped_folder = Some(path);
+            }
+            Message::BrowseFolderClicked | Message::FolderSelected(None) => {}
         }
     }
 
@@ -73,77 +68,57 @@ impl OrgSyncScreen {
     }
 
     pub fn view(&self, org_name: &str) -> Element<'_, Message> {
-        let title = text("Folder sync").size(32);
-        let subtitle = text(format!("Org: {org_name}")).size(14);
+        let content: Element<Message> = if let Some(folder) = &self.mapped_folder {
+            let log_items = self
+                .upload_log
+                .iter()
+                .rev()
+                .take(200)
+                .fold(column![].spacing(4), |col, line| {
+                    col.push(text(line).size(12))
+                });
 
-        let mapping_row = row![
-            text("Local folder:").size(14),
-            text_input("/path/to/folder", &self.local_folder_input)
-                .on_input(Message::LocalFolderChanged)
-                .width(Length::Fill),
-            button("Save")
-                .padding(10)
-                .on_press(Message::SaveMappingClicked),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center)
-        .width(Length::Fill);
+            let log_header = row![
+                text("Activity Log").size(13).width(Length::Fill),
+                button("Clear").padding([4, 10]).on_press(Message::ClearLogClicked),
+            ]
+            .align_y(Alignment::Center);
 
-        let watch_button = if self.watching {
-            button("Stop watching")
-                .padding(12)
-                .on_press(Message::StopWatchingClicked)
-        } else {
-            button("Start watching")
-                .padding(12)
-                .on_press(Message::StartWatchingClicked)
-        };
-
-        let clear_log = button("Clear log")
-            .padding(12)
-            .on_press(Message::ClearLogClicked);
-
-        let status_line: Element<Message> = match &self.status_line {
-            Some(s) => text(s).size(12).into(),
-            None => text("").into(),
-        };
-
-        let log_items = self
-            .upload_log
-            .iter()
-            .rev()
-            .take(200)
-            .fold(column![].spacing(6), |col, line| {
-                col.push(text(line).size(12))
-            });
-
-        let log_panel = container(scrollable(log_items).height(Length::Fill))
-            .padding(12)
-            .width(Length::Fill)
-            .height(Length::Fill);
-
-        let content = column![
-            title,
-            subtitle,
-            mapping_row,
-            row![watch_button, clear_log].spacing(10),
-            status_line,
-            log_panel,
-        ]
-        .spacing(12)
-        .width(Length::Fill)
-        .align_x(Alignment::Center);
-
-        let content = container(content)
+            column![
+                text("You are all set!").size(28),
+                text(format!("Tracking: {folder}")).size(13),
+                text(format!("Org: {org_name}")).size(13),
+                log_header,
+                container(scrollable(log_items).height(Length::Fill))
+                    .padding(8)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            ]
+            .spacing(12)
             .padding(24)
             .width(Length::Fill)
-            .max_width(900);
-
-        container(content)
+            .into()
+        } else {
+            container(
+                column![
+                    text("Which folder would you like to track?").size(18),
+                    button("Browse…")
+                        .padding([10, 24])
+                        .on_press(Message::BrowseFolderClicked),
+                ]
+                .spacing(20)
+                .align_x(Alignment::Center),
+            )
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Horizontal::Center)
             .align_y(Vertical::Center)
+            .into()
+        };
+
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
             .into()
     }
 }
