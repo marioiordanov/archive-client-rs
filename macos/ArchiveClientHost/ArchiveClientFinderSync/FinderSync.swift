@@ -10,7 +10,7 @@ import FinderSync
 
 class FinderSync: FIFinderSync {
 
-    var myFolderURL = URL(fileURLWithPath: "/Users/mario/Projects/archive-client-rs/test-folder")
+    var myFolderURL = URL(fileURLWithPath: "/Users/mario/kibrit-data")
     let cache = RevisionCache.shared
 
     // TODO: load myFolderUrl from some config file or ask ArchiveClientRs
@@ -41,11 +41,13 @@ class FinderSync: FIFinderSync {
         let submenu = NSMenu(title: "Versions")
 
         if let revisions = cache.get(path: fileURL.path) {
-            let archived = revisions.sorted(by: { $0.revision.modifiedTime > $1.revision.modifiedTime }).dropFirst().prefix(3)
+            // dropping first, because this is the current version
+            let archived = revisions.sorted(by: { $0.revision.modifiedTime > $1.revision.modifiedTime }).dropFirst()
             if archived.isEmpty {
                 return nil
             }
-            for rev in archived {
+            
+            for rev in archived.prefix(3) {
                 let item = NSMenuItem(
                     title: rev.revision.displayTitle,
                     action: #selector(openRevision(_:)),
@@ -55,8 +57,30 @@ class FinderSync: FIFinderSync {
                 item.tag = rev.tag
                 submenu.addItem(item)
             }
-
-            submenu.addItem(.separator())
+            
+            let show_all_item = NSMenuItem(
+                title: "Show All",
+                action: nil,
+                keyEquivalent: ""
+            )
+            
+            if archived.count > 10 {
+                submenu.addItem(show_all_item)
+            } else if archived.count > 3 {
+                let show_all_submenu = NSMenu(title: "Show All")
+                for rev in archived.dropFirst(3) {
+                    let item = NSMenuItem(
+                        title: rev.revision.displayTitle,
+                        action: #selector(openRevision(_:)),
+                        keyEquivalent: ""
+                    )
+                    item.target = self
+                    item.tag = rev.tag
+                    show_all_submenu.addItem(item)
+                }
+                show_all_item.submenu = show_all_submenu
+                submenu.addItem(show_all_item)
+            }
 
             let refresh = NSMenuItem(
                 title: "Refresh",
