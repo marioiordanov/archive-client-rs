@@ -5,3 +5,4 @@ pub mod http;
 pub mod local_storage;
 pub mod org;
 pub mod resolver;
+pub mod revisions_cache;

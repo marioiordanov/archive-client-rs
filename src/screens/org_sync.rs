@@ -80,7 +80,9 @@ impl OrgSyncScreen {
 
             let log_header = row![
                 text("Activity Log").size(13).width(Length::Fill),
-                button("Clear").padding([4, 10]).on_press(Message::ClearLogClicked),
+                button("Clear")
+                    .padding([4, 10])
+                    .on_press(Message::ClearLogClicked),
             ]
             .align_y(Alignment::Center);
 

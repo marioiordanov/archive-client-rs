@@ -25,10 +25,17 @@ pub enum Message {
 }
 
 #[derive(Debug)]
+pub(crate) enum LoadingRevisions {
+    Loading,
+    Loaded(Vec<FileWithRevision>),
+    Error
+}
+
+#[derive(Debug)]
 pub enum UnixSocketCommand {
     GetFileRevisions {
         path: PathBuf,
-        sender: Box<tokio::sync::oneshot::Sender<Vec<FileWithRevision>>>,
+        sender: Option<Box<tokio::sync::oneshot::Sender<LoadingRevisions>>>,
     },
     DownloadFileAtPath {
         file_id: String,
@@ -67,10 +74,7 @@ pub enum OrgMessage {
         result: Result<(), OrgError>,
     },
     AuditLogLoaded {
-        result: Result<
-            (Vec<crate::services::drive::Activity>, Option<String>),
-            OrgError,
-        >,
+        result: Result<(Vec<crate::services::drive::Activity>, Option<String>), OrgError>,
     },
 }
 

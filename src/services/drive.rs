@@ -5,9 +5,10 @@ use std::{
     str::FromStr,
 };
 
+use chrono::NaiveDateTime;
 use iced::{Task, futures::stream::unfold};
 use reqwest::header;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::json;
 use url::Url;
 
@@ -44,16 +45,39 @@ pub struct DriveFileWithParent {
     parent: String,
 }
 
+pub fn deserialize_modified_time_from_rf339_to_local_time<'de, D>(
+    deserializer: D,
+) -> Result<NaiveDateTime, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let time = String::deserialize(deserializer)?;
+
+    Ok(chrono::DateTime::parse_from_rfc3339(&time)
+        .map_err(|e| serde::de::Error::custom("Datetime not in RFC339 format"))?
+        .naive_local())
+}
+
+fn serialize_naive_datetime<S>(dt: &NaiveDateTime, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    // %c format specifier: Sun Jul  8 00:34:60 2001 Locale’s date and time (e.g., Thu Mar  3 23:05:25 2005).
+    serializer.serialize_str(&format!("{}", dt.format("%c")))
+}
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct DriveRevision {
     pub id: String,
-    #[serde(rename = "modifiedTime")]
-    pub modified_time: String,
+    #[serde(
+        rename = "modifiedTime",
+        deserialize_with = "deserialize_modified_time_from_rf339_to_local_time",
+        serialize_with = "serialize_naive_datetime"
+    )]
+    pub modified_time: NaiveDateTime,
     pub size: Option<String>,
     #[serde(rename = "originalFilename")]
     pub original_filename: Option<String>,
 }
-
 #[derive(Debug, Deserialize)]
 struct RevisionListResponse {
     revisions: Vec<DriveRevision>,
@@ -318,17 +342,15 @@ impl DriveService {
             Url::from_str(&format!("{FILES_URL}/{file_id}/revisions/{revision_id}")).unwrap();
 
         HTTP.patch(url.clone())
-        .bearer_auth(access_token)
-        .json(&json!(
-            {
-                "keepForever": true
-            }
-        ))
-        .send()
-        .await
-        .map_err(|e| {
-                CommonServiceError::from((e, access_token.to_string()))
-            })?;
+            .bearer_auth(access_token)
+            .json(&json!(
+                {
+                    "keepForever": true
+                }
+            ))
+            .send()
+            .await
+            .map_err(|e| CommonServiceError::from((e, access_token.to_string())))?;
 
         url.set_query(Some("alt=media"));
 
@@ -581,7 +603,7 @@ where
     // its not possible for a file to not have parent
     if let Some(stripped_name) = person_name.strip_prefix("people/") {
         Ok(stripped_name.to_string())
-    }else {
+    } else {
         Ok(person_name)
     }
 }
@@ -637,20 +659,28 @@ impl fmt::Display for Detail {
         match self {
             Detail::Edit(_) => write!(f, "edited"),
             Detail::Create(c) => {
-                if c.upload.is_some() { write!(f, "uploaded") } else { write!(f, "created") }
+                if c.upload.is_some() {
+                    write!(f, "uploaded")
+                } else {
+                    write!(f, "created")
+                }
             }
             Detail::Move(m) => {
-                let from = m.removed_parents.as_deref()
+                let from = m
+                    .removed_parents
+                    .as_deref()
                     .and_then(|v| v.first())
                     .map(|p| p.drive_item.title.as_str());
-                let to = m.added_parents.as_deref()
+                let to = m
+                    .added_parents
+                    .as_deref()
                     .and_then(|v| v.first())
                     .map(|p| p.drive_item.title.as_str());
                 match (from, to) {
                     (Some(f_), Some(t)) => write!(f, "moved from \"{f_}\" to \"{t}\""),
-                    (Some(f_), None)    => write!(f, "moved out of \"{f_}\""),
-                    (None,    Some(t))  => write!(f, "moved to \"{t}\""),
-                    (None,    None)     => write!(f, "moved"),
+                    (Some(f_), None) => write!(f, "moved out of \"{f_}\""),
+                    (None, Some(t)) => write!(f, "moved to \"{t}\""),
+                    (None, None) => write!(f, "moved"),
                 }
             }
             Detail::Rename(r) => write!(f, "renamed \"{}\" → \"{}\"", r.old_title, r.new_title),
@@ -664,17 +694,21 @@ impl fmt::Display for Detail {
             Detail::Restore(_) => write!(f, "restored"),
             Detail::PermissionChange(p) => {
                 let added = p.added_permissions.as_deref().map(|v| v.len()).unwrap_or(0);
-                let removed = p.removed_permissions.as_deref().map(|v| v.len()).unwrap_or(0);
+                let removed = p
+                    .removed_permissions
+                    .as_deref()
+                    .map(|v| v.len())
+                    .unwrap_or(0);
                 match (added, removed) {
                     (a, 0) => write!(f, "granted {a} permission(s)"),
                     (0, r) => write!(f, "revoked {r} permission(s)"),
                     (a, r) => write!(f, "changed permissions (+{a}/-{r})"),
                 }
             }
-            Detail::Comment(_)           => write!(f, "commented"),
-            Detail::DlpChange(_)         => write!(f, "triggered DLP change"),
-            Detail::Reference(_)         => write!(f, "referenced in external app"),
-            Detail::SettingsChange(_)    => write!(f, "changed settings"),
+            Detail::Comment(_) => write!(f, "commented"),
+            Detail::DlpChange(_) => write!(f, "triggered DLP change"),
+            Detail::Reference(_) => write!(f, "referenced in external app"),
+            Detail::SettingsChange(_) => write!(f, "changed settings"),
             Detail::AppliedLabelChange(_) => write!(f, "changed label"),
         }
     }
@@ -684,9 +718,9 @@ impl fmt::Display for Actor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Actor::User(u) => write!(f, "{u}"),
-            Actor::Anonymous(_)    => write!(f, "anonymous user"),
+            Actor::Anonymous(_) => write!(f, "anonymous user"),
             Actor::Impersonation(_) => write!(f, "impersonator"),
-            Actor::System(_)       => write!(f, "system"),
+            Actor::System(_) => write!(f, "system"),
             Actor::Administrator(_) => write!(f, "administrator"),
         }
     }
@@ -700,12 +734,15 @@ impl fmt::Display for User {
                     write!(f, "you")
                 } else {
                     // person_name is "people/<id>"; show the id portion
-                    let name = k.person_name.strip_prefix("people/").unwrap_or(&k.person_name);
+                    let name = k
+                        .person_name
+                        .strip_prefix("people/")
+                        .unwrap_or(&k.person_name);
                     write!(f, "user:{name}")
                 }
             }
-            User::DeletedUser(_)  => write!(f, "deleted user"),
-            User::UnknownUser(_)  => write!(f, "unknown user"),
+            User::DeletedUser(_) => write!(f, "deleted user"),
+            User::UnknownUser(_) => write!(f, "unknown user"),
         }
     }
 }
@@ -713,8 +750,8 @@ impl fmt::Display for User {
 impl fmt::Display for Target {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Target::DriveItem(i)   => write!(f, "\"{}\"", i.title),
-            Target::Drive(d)       => write!(f, "drive \"{}\"", d.title),
+            Target::DriveItem(i) => write!(f, "\"{}\"", i.title),
+            Target::Drive(d) => write!(f, "drive \"{}\"", d.title),
             Target::FileComment(_) => write!(f, "a file comment"),
         }
     }
@@ -726,7 +763,11 @@ impl fmt::Display for Activity {
         let actors = if self.actors.is_empty() {
             "unknown".to_string()
         } else {
-            self.actors.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ")
+            self.actors
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         };
 
         // what
@@ -736,7 +777,11 @@ impl fmt::Display for Activity {
         let targets = if self.targets.is_empty() {
             "unknown target".to_string()
         } else {
-            self.targets.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")
+            self.targets
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         };
 
         write!(f, "[{}] {} {} {}", self.time, actors, action, targets)
@@ -747,7 +792,7 @@ impl fmt::Display for ActivityTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ActivityTime::Timestamp(ts) => write!(f, "{ts}"),
-            ActivityTime::TimeRange(r)  => write!(f, "{} – {}", r.start_time, r.end_time),
+            ActivityTime::TimeRange(r) => write!(f, "{} – {}", r.start_time, r.end_time),
         }
     }
 }

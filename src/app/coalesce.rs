@@ -630,7 +630,7 @@ impl<'a> EventsTransaction<'a> {
             }
             other => {
                 panic!("Impossible case {other:?}")
-            },
+            }
         }
     }
 

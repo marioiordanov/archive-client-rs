@@ -20,7 +20,10 @@ use crate::{
         },
         subscriptions::tcp_server_subscription,
     },
-    services::{file_index::FileIndex, local_storage::LocalStorageService, resolver::Resolver},
+    services::{
+        file_index::FileIndex, local_storage::LocalStorageService, resolver::Resolver,
+        revisions_cache::Cache,
+    },
 };
 
 lazy_static! {
@@ -71,6 +74,7 @@ enum UserState {
         root_folder_id: String,
         root_dir: PathBuf,
         user_data: UserData,
+        revisions_cache: Cache,
     },
 }
 
@@ -119,6 +123,7 @@ impl UserState {
                 root_folder_id: root_folder_id.clone(),
                 root_dir: root_dir,
                 user_data: user_data.clone(),
+                revisions_cache: Cache::default(),
             };
         } else {
             warn!("impossible to sync org from {}", self);
@@ -232,6 +237,7 @@ impl ArchiveClient {
                                 root_dir,
                                 root_folder_id: org.config.archive_folder_id,
                                 user_data: session.user.clone().into(),
+                                revisions_cache: Cache::default(),
                             }
                         } else {
                             UserState::OrgJoined {
@@ -275,8 +281,7 @@ impl ArchiveClient {
 
                 (state, screen, next_task)
             }
-            (false, false) =>{
-                (
+            (false, false) => (
                 AppState {
                     user_state: UserState::SignedOut,
                     pending_intents: vec![],
@@ -284,7 +289,7 @@ impl ArchiveClient {
                 },
                 app::state::Screen::SignIn(screens::signin::SignInScreen::default()),
                 Task::none(),
-            )},
+            ),
             (false, true) => panic!("Impossible"),
         };
 
@@ -329,7 +334,7 @@ impl ArchiveClient {
 
         let unix = match self.app.user_state {
             UserState::OrgSynced { .. } => tcp_server_subscription(),
-            _ => Subscription::none()
+            _ => Subscription::none(),
         };
 
         Subscription::batch([fs_watch, unix])

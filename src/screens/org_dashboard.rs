@@ -199,7 +199,10 @@ impl OrgDashboardScreen {
                 self.audit_log_loading = true;
                 self.audit_log_error = None;
             }
-            Message::AuditLogLoaded { entries, next_page_token } => {
+            Message::AuditLogLoaded {
+                entries,
+                next_page_token,
+            } => {
                 self.audit_log_entries.extend(entries);
                 self.audit_log_next_page = next_page_token;
                 self.audit_log_loading = false;
@@ -558,7 +561,10 @@ fn format_activity(activity: &Activity, people: &HashMap<String, String>) -> Str
             .join(", ")
     };
 
-    format!("[{}] {} {} {}", activity.time, actors, activity.primary_action_detail, targets)
+    format!(
+        "[{}] {} {} {}",
+        activity.time, actors, activity.primary_action_detail, targets
+    )
 }
 
 fn render_audit_log_panel(screen: &OrgDashboardScreen) -> Element<'_, Message> {
@@ -601,11 +607,7 @@ fn render_audit_log_panel(screen: &OrgDashboardScreen) -> Element<'_, Message> {
         let rows = screen
             .audit_log_entries
             .iter()
-            .map(|activity| {
-                text(activity.to_string())
-                    .size(12)
-                    .into()
-            })
+            .map(|activity| text(activity.to_string()).size(12).into())
             .collect::<Vec<Element<Message>>>();
 
         column(rows).spacing(4).into()

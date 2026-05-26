@@ -77,6 +77,7 @@ impl ArchiveClient {
                     root_folder_id,
                     root_dir,
                     user_data,
+                    ..
                 },
                 Intent::Upload { path },
             ) => Self::upload_task(
@@ -92,6 +93,7 @@ impl ArchiveClient {
                     root_folder_id,
                     root_dir,
                     user_data,
+                    ..
                 },
                 Intent::EnsureFolder { path },
             ) => Self::ensure_folder_task(
@@ -106,6 +108,7 @@ impl ArchiveClient {
                     root_folder_id,
                     root_dir,
                     user_data,
+                    ..
                 },
                 Intent::Move { from, to },
             ) => Self::move_task(
@@ -122,6 +125,7 @@ impl ArchiveClient {
                     root_folder_id,
                     root_dir,
                     user_data,
+                    ..
                 },
                 Intent::MoveAndUpload { from, to },
             ) => Self::move_then_upload_task(
@@ -138,6 +142,7 @@ impl ArchiveClient {
                     root_folder_id,
                     root_dir,
                     user_data,
+                    ..
                 },
                 Intent::Remove { path },
             ) => Self::delete_task(
@@ -152,6 +157,8 @@ impl ArchiveClient {
                     root_folder_id,
                     root_dir,
                     user_data,
+                    revisions_cache,
+                    ..
                 },
                 Intent::ExternalRequest { cmd },
             ) => match cmd {
@@ -162,19 +169,23 @@ impl ArchiveClient {
                         root_folder_id.clone(),
                         resolver.clone(),
                         user_data.access_token.clone(),
+                        revisions_cache.clone()
                     )
                 }
-                UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time, sender } => {
-                    Self::download_file_at_path_task(
-                        file_id,
-                        revision_id,
-                        modified_time,
-                        resolver.clone(),
-                        root_dir.clone(),
-                        user_data.access_token.clone(),
-                        sender,
-                    )
-                }
+                UnixSocketCommand::DownloadFileAtPath {
+                    file_id,
+                    revision_id,
+                    modified_time,
+                    sender,
+                } => Self::download_file_at_path_task(
+                    file_id,
+                    revision_id,
+                    modified_time,
+                    resolver.clone(),
+                    root_dir.clone(),
+                    user_data.access_token.clone(),
+                    sender,
+                ),
                 _ => Task::none(),
             },
             (user_state, intent) => {

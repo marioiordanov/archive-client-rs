@@ -183,7 +183,11 @@ impl ArchiveClient {
             ) => {
                 let page_token = screen.audit_log_next_page.clone();
                 screen.update(msg);
-                Self::fetch_audit_log_task(org_id.clone(), user_data.access_token.clone(), page_token)
+                Self::fetch_audit_log_task(
+                    org_id.clone(),
+                    user_data.access_token.clone(),
+                    page_token,
+                )
             }
             (
                 UserState::OrgCreated { user_data, .. },
@@ -271,7 +275,8 @@ impl ArchiveClient {
                             .args(["-e", "POSIX path of (choose folder)"])
                             .output()
                             .ok()?;
-                        out.status.success()
+                        out.status
+                            .success()
                             .then(|| String::from_utf8(out.stdout).ok())
                             .flatten()
                             .map(|s| s.trim().to_string())
@@ -300,7 +305,9 @@ impl ArchiveClient {
                     return Task::none();
                 }
 
-                screen.update(screens::org_sync::Message::FolderSelected(Some(path.clone())));
+                screen.update(screens::org_sync::Message::FolderSelected(Some(
+                    path.clone(),
+                )));
 
                 LocalStorageService::update_object::<OrgState, _>(ObjectType::Org, |org| {
                     org.config.local_folder_path = Some(path.clone());
@@ -338,9 +345,7 @@ impl ArchiveClient {
                     screens::org_sync::Message::FolderSelected(None),
                 )),
             ) => Task::none(),
-            other => {
-                Task::none()
-            }
+            other => Task::none(),
         }
     }
 }

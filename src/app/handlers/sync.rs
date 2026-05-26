@@ -64,6 +64,7 @@ impl ArchiveClient {
                     root_folder_id,
                     user_data,
                     resolver,
+                    ..
                 },
                 Screen::OrgSync(screen),
                 SyncMessage::ActionsReady(actions),

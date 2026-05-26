@@ -35,6 +35,7 @@ impl ArchiveClient {
                     user_data,
                     resolver,
                     root_folder_id,
+                    revisions_cache,
                     ..
                 },
                 UnixSocketCommand::GetFileRevisions { path, sender },
@@ -44,6 +45,7 @@ impl ArchiveClient {
                 root_folder_id.clone(),
                 resolver.clone(),
                 user_data.access_token.clone(),
+                revisions_cache.clone()
             ),
             (
                 UserState::OrgSynced {
@@ -74,8 +76,10 @@ impl ArchiveClient {
                     error: Some(err),
                 },
             ) => {
-                if matches!( err, CommonServiceError::TokenExpired(..)) {
-                    self.app.pending_intents.push(crate::app::state::Intent::ExternalRequest { cmd: *cmd });
+                if matches!(err, CommonServiceError::TokenExpired(..)) {
+                    self.app
+                        .pending_intents
+                        .push(crate::app::state::Intent::ExternalRequest { cmd: *cmd });
                 }
 
                 self.handle_error(crate::app::message::GlobalError::Common(err))

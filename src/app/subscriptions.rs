@@ -10,12 +10,13 @@ use iced::{Subscription, Task};
 use log::warn;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, UnixListener, UnixSocket, UnixStream};
+use tokio::select;
 
 use crate::app::coalesce;
 use crate::app::fs_index::FsIndex;
-use crate::app::message::{Message, SyncMessage, UnixSocketCommand};
+use crate::app::message::{LoadingRevisions, Message, SyncMessage, UnixSocketCommand};
 
-const ARCHIVE_WINDOW: Duration = Duration::from_secs(20); // 15 minutes
+const ARCHIVE_WINDOW: Duration = Duration::from_secs(15); // 15 minutes
 const MAX_ARCHIVE_WINDOW: Duration = Duration::from_secs(3600 * 2);
 
 pub fn fs_watch_subscription(root: PathBuf) -> Subscription<Message> {
@@ -48,19 +49,30 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                     let (tx, rx) = tokio::sync::oneshot::channel();
                                     let cmd = UnixSocketCommand::GetFileRevisions {
                                         path: msg_parts.last().unwrap().into(),
-                                        sender: Box::new(tx),
+                                        sender: Some(Box::new(tx)),
                                     };
                                     output.send(Message::UnixSocket(cmd)).await;
 
                                     match rx.await {
-                                        Ok(s) => {
+                                        Ok(LoadingRevisions::Loaded(s)) => {
                                             let b = serde_json::to_vec_pretty(&s).unwrap();
                                             tokio::io::AsyncWriteExt::write(&mut stream, &b)
                                                 .await
                                                 .unwrap();
                                         }
-                                        Err(e) => {
-                                            println!("{e}");
+                                        Ok(LoadingRevisions::Loading) => {
+                                            tokio::io::AsyncWriteExt::write(
+                                                &mut stream,
+                                                b"loading",
+                                            )
+                                            .await
+                                            .unwrap();
+                                        }
+                                        Ok(LoadingRevisions::Error) | Err(..) => {
+                                            tokio::io::AsyncWriteExt::write(&mut stream, b"error")
+                                                .await
+                                                .unwrap();
+                                            println!("ERROR");
                                         }
                                     }
                                 }
@@ -80,7 +92,11 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                     output.send(Message::UnixSocket(cmd)).await;
 
                                     if let Ok(path) = rx.await {
-                                        let _ = tokio::io::AsyncWriteExt::write(&mut stream, path.as_bytes()).await;
+                                        let _ = tokio::io::AsyncWriteExt::write(
+                                            &mut stream,
+                                            path.as_bytes(),
+                                        )
+                                        .await;
                                     }
                                 }
                                 other @ _ => {
