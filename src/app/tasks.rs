@@ -319,6 +319,9 @@ impl ArchiveClient {
 
                             Ok(())
                         }else {
+                            if let Some(sender) = sender_option {
+                                sender.send(LoadingRevisions::Loading);
+                            }
                             let mut revisions: Vec<DriveRevision> =
                             match DriveService::list_revisions(&id, &access_token).await {
                                 Ok(r) => r,

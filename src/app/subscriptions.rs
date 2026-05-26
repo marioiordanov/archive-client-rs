@@ -54,9 +54,9 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                     output.send(Message::UnixSocket(cmd)).await;
 
                                     match rx.await {
-                                        Ok(LoadingRevisions::Loaded(s)) => {
-                                            let b = serde_json::to_vec_pretty(&s).unwrap();
-                                            tokio::io::AsyncWriteExt::write(&mut stream, &b)
+                                        Ok(LoadingRevisions::Loaded(revisions)) => {
+                                            let bytes = serde_json::to_vec_pretty(&revisions).unwrap();
+                                            tokio::io::AsyncWriteExt::write(&mut stream, &bytes)
                                                 .await
                                                 .unwrap();
                                         }
@@ -72,7 +72,6 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                             tokio::io::AsyncWriteExt::write(&mut stream, b"error")
                                                 .await
                                                 .unwrap();
-                                            println!("ERROR");
                                         }
                                     }
                                 }
