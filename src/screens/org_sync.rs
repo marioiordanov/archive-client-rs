@@ -1,5 +1,5 @@
 use iced::alignment::{Horizontal, Vertical};
-use iced::widget::{button, column, container, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Alignment, Element, Length};
 
 use crate::app::message::ScreenMessage;

@@ -1,12 +1,10 @@
 use std::{
-    collections::HashMap,
     fmt,
-    path::{Path, PathBuf},
+    path::PathBuf,
     str::FromStr,
 };
 
 use chrono::NaiveDateTime;
-use iced::{Task, futures::stream::unfold};
 use reqwest::header;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::json;
@@ -14,7 +12,7 @@ use url::Url;
 
 use crate::{
     HTTP,
-    app::message::{CommonServiceError, Message, SyncError, SyncMessage},
+    app::message::{CommonServiceError, SyncError},
     constants::{FILES_UPLOAD_URL, FILES_URL},
     services::http::HttpService,
 };

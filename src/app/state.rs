@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{collections::HashMap, path::PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +7,6 @@ use crate::{
     UserState,
     app::message::UnixSocketCommand,
     screens::{self},
-    services::file_index::FileIndex,
 };
 pub enum Screen {
     SignIn(screens::signin::SignInScreen),

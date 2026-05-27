@@ -1,16 +1,11 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
 
-use http_body_util::BodyExt;
 use iced::Task;
 use serde::Serialize;
 
 use crate::{
     ArchiveClient, UserState,
-    app::message::{CommonServiceError, Message, SyncError, UnixSocketCommand},
-    services::drive::{DriveRevision, DriveService},
+    app::message::{CommonServiceError, Message, UnixSocketCommand},
+    services::drive::DriveRevision,
 };
 
 #[derive(Debug, Serialize)]

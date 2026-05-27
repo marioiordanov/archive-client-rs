@@ -1,14 +1,13 @@
 use hyper::StatusCode;
-use iced::futures::lock::Mutex;
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use crate::{
     app::handlers::external_commands::FileWithRevision,
     screens,
     services::{
         auth::{AccessTokenResponse, RefreshTokenResponse},
-        drive::{DriveFile, DriveRevision},
+        drive::DriveFile,
         file_index::FileIndex,
         org::{DashboardRowData, RootFolderEntry},
     },

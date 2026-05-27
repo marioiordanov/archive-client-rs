@@ -1,12 +1,10 @@
 use std::{
-    collections::HashMap,
     ops::Add,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use dashmap::DashMap;
-use iced::time::now;
 
 use crate::services::drive::DriveRevision;
 
@@ -45,7 +43,7 @@ impl Cache {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .add(TTL_DURATION),
-            sorted_revisions: sorted_revisions,
+            sorted_revisions,
         };
 
         self.file_id_to_revisions.insert(file_id, cached);

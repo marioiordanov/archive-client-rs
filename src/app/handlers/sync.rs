@@ -1,25 +1,22 @@
 use std::{
-    collections::{HashMap, VecDeque},
-    future,
+    collections::VecDeque,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use iced::{
     Task,
-    futures::{StreamExt, stream},
+    futures::StreamExt,
 };
 
 use crate::{
     ArchiveClient, UserState,
     app::{
-        handlers::org,
         message::{CommonServiceError, Message, SyncAction, SyncError, SyncMessage},
-        state::{Intent, OrgConfig, OrgState, Screen, UserProfile},
+        state::{Intent, OrgState, Screen},
     },
     screens,
     services::{
-        drive::{DriveFile, DriveService},
+        drive::DriveService,
         file_index::FileIndex,
         local_storage::{LocalStorageService, ObjectType},
         resolver::Resolver,

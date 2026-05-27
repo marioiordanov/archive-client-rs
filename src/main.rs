@@ -1,9 +1,8 @@
-use std::{collections::VecDeque, fs::File, path::PathBuf, sync::RwLock};
+use std::path::PathBuf;
 
 use iced::{Element, Subscription, Task};
 use lazy_static::lazy_static;
 use log::warn;
-use url::Url;
 
 mod app;
 mod constants;
@@ -15,7 +14,7 @@ use crate::{
     app::{
         message::Message,
         state::{
-            AppState, Intent, OrgConfig, OrgState, Role, Screen, SessionState, UserData,
+            AppState, Intent, OrgState, Role, Screen, SessionState, UserData,
             UserProfile,
         },
         subscriptions::tcp_server_subscription,
@@ -121,7 +120,7 @@ impl UserState {
             *self = UserState::OrgSynced {
                 resolver,
                 root_folder_id: root_folder_id.clone(),
-                root_dir: root_dir,
+                root_dir,
                 user_data: user_data.clone(),
                 revisions_cache: Cache::default(),
             };
@@ -224,11 +223,11 @@ impl ArchiveClient {
 
                         let user_state = if let Some(root_dir) = mapped
                             .clone()
-                            .map(|dir| PathBuf::from(dir))
+                            .map(PathBuf::from)
                             .filter(|_| org.status == app::state::OrgStatus::Ready)
                         {
                             let resolver = Resolver::new(
-                                PathBuf::from(root_dir.clone()),
+                                root_dir.clone(),
                                 FileIndex::load(org.config.archive_folder_id.clone()),
                             );
 
@@ -308,7 +307,9 @@ impl ArchiveClient {
             | crate::UserState::OrgSynced { user_data, .. } => &user_data.email,
         };
 
-        let contents = match &self.screen {
+        
+
+        match &self.screen {
             app::state::Screen::SignIn(screen) => screen.view().map(|m| Message::Screen(m.into())),
             app::state::Screen::OrgSelection(screen) => {
                 screen.view().map(|m| Message::Screen(m.into()))
@@ -319,9 +320,7 @@ impl ArchiveClient {
             app::state::Screen::OrgSync(screen) => {
                 screen.view(folder_name).map(|m| Message::Screen(m.into()))
             }
-        };
-
-        contents
+        }
     }
 
     fn subscription(&self) -> Subscription<Message> {

@@ -1,9 +1,9 @@
 use std::{
-    path::{self, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::RwLock;
 
 use crate::{
     app::message::SyncError,

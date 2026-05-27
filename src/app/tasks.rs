@@ -2,12 +2,8 @@ use std::{path::PathBuf, task::Poll};
 
 use iced::{
     Task,
-    futures::{
-        future::{self, poll_fn},
-        poll,
-    },
+    futures::poll,
 };
-use tokio::sync::oneshot::error::RecvError;
 
 use crate::{
     ArchiveClient,
@@ -24,7 +20,7 @@ use crate::{
         drive::{DriveRevision, DriveService},
         org::OrgService,
         resolver::Resolver,
-        revisions_cache::{Cache, CachedRevisions},
+        revisions_cache::Cache,
     },
 };
 
@@ -208,7 +204,7 @@ impl ArchiveClient {
                 path,
                 object_was_on_remote: result
                     .as_ref()
-                    .map_or(false, |object_was_on_remote| *object_was_on_remote),
+                    .is_ok_and(|object_was_on_remote| *object_was_on_remote),
                 result: result.map(|_| ()),
             })
         })
@@ -277,13 +273,13 @@ impl ArchiveClient {
                             sender.send(LoadingRevisions::Loading);
                         }
 
-                        return Err((
+                        Err((
                                     CommonServiceError::TokenExpired(token.clone()),
                                     Box::new(UnixSocketCommand::GetFileRevisions {
                                         path,
                                         sender: None,
                                     }),
-                                ));
+                                ))
                     }
                     Poll::Ready(Err(err)) => {
                         if let Some(sender) = sender_option {
@@ -291,27 +287,27 @@ impl ArchiveClient {
                         }
 
                         if let SyncError::Common(c) = err {
-                            return Err((
+                            Err((
                                     c,
                                     Box::new(UnixSocketCommand::GetFileRevisions {
                                         path,
                                         sender: None,
                                     }),
-                                ));
+                                ))
                         }else {
-                            return Err((
+                            Err((
                                     CommonServiceError::Unknown(err.to_string()),
                                     Box::new(UnixSocketCommand::GetFileRevisions {
                                         path,
                                         sender: None,
                                     }),
-                                ));
+                                ))
                         }
                     }
                     Poll::Ready(Ok(id)) => {
                         if let Some(mut revisions) = cache.get(id.clone()) {
                             revisions.sort_by_key(|r|r.modified_time);
-                            let mut revisions = revisions.into_iter().map(|r| FileWithRevision::new( id.clone(),  r )).collect();
+                            let revisions = revisions.into_iter().map(|r| FileWithRevision::new( id.clone(),  r )).collect();
 
                             if let Some(sender) = sender_option {
                                 sender.send(LoadingRevisions::Loaded(revisions));

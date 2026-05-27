@@ -1,16 +1,10 @@
-use std::env::temp_dir;
-use std::rc::Rc;
-use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
-use hyper_util::rt::TokioIo;
 use iced::futures::{SinkExt, StreamExt};
 use iced::stream;
-use iced::{Subscription, Task};
-use log::warn;
+use iced::Subscription;
 use tokio::io::AsyncReadExt;
-use tokio::net::{TcpListener, UnixListener, UnixSocket, UnixStream};
-use tokio::select;
+use tokio::net::TcpListener;
 
 use crate::app::coalesce;
 use crate::app::fs_index::FsIndex;
@@ -98,7 +92,7 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                         .await;
                                     }
                                 }
-                                other @ _ => {
+                                other => {
                                     println!("Unhandled case {other:?}");
                                 }
                             };
@@ -128,7 +122,7 @@ fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Mes
             let watcher = fs_watcher::AsyncWatcher::spawn(
                 dir_root.as_path(),
                 0.5,
-                &[&dir_root.join(".archived/").to_string_lossy().to_string()],
+                &[dir_root.join(".archived/").to_string_lossy().as_ref()],
             )
             .await;
             let (mut w, mut events) = match watcher {
