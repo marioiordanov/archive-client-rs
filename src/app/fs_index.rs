@@ -11,7 +11,13 @@ fn file_id(path: &Path) -> u64 {
     }
     #[cfg(windows)]
     {
-        file_id::get_file_id(path).unwrap_or(0)
+        use file_id::FileId::{self};
+
+        if let Some(FileId::LowRes(file_index, ..)) = file_id::get_low_res_file_id(path).ok() {
+            file_index
+        }else {
+            0
+        }
     }
 }
 
