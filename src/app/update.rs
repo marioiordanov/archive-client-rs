@@ -91,7 +91,7 @@ impl ArchiveClient {
                 UserState::OrgSynced {
                     resolver,
                     root_folder_id,
-                    root_dir,
+                    root_dir: _,
                     user_data,
                     ..
                 },
@@ -140,7 +140,7 @@ impl ArchiveClient {
                 UserState::OrgSynced {
                     resolver,
                     root_folder_id,
-                    root_dir,
+                    root_dir: _,
                     user_data,
                     ..
                 },

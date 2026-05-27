@@ -84,6 +84,7 @@ impl<TRequest: Serialize> HttpService<TRequest> {
         request
     }
 
+    #[allow(dead_code)]
     pub async fn put<TResponse: DeserializeOwned, TError: From<(reqwest::Error, String)>>(
         self,
     ) -> Result<TResponse, TError> {
@@ -102,6 +103,7 @@ impl<TRequest: Serialize> HttpService<TRequest> {
         self.send::<TResponse, TError>("post").await
     }
 
+    #[allow(dead_code)]
     pub async fn post_no_response<TError: From<(reqwest::Error, String)>>(
         self,
     ) -> Result<(), TError> {

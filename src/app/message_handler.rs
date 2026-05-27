@@ -345,7 +345,7 @@ impl ArchiveClient {
                     screens::org_sync::Message::FolderSelected(None),
                 )),
             ) => Task::none(),
-            other => Task::none(),
+            _ => Task::none(),
         }
     }
 }

@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub(crate) struct FsIndex {
+    #[allow(dead_code)]
     pub(crate) path_to_inode: HashMap<PathBuf, u64>,
+    #[allow(dead_code)]
     pub(crate) inode_to_path: HashMap<u64, PathBuf>,
     pub(crate) direct_children: HashMap<PathBuf, Vec<(PathBuf, u64)>>,
 }
@@ -30,9 +32,7 @@ impl FsIndex {
         for entry in std::fs::read_dir(dir_root).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.is_symlink() {
-                continue;
-            } else if path.is_relative() {
+            if path.is_symlink() || path.is_relative() {
                 continue;
             } else if path.is_file() {
                 let inode = path.metadata().unwrap().ino();

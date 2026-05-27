@@ -524,6 +524,7 @@ fn render_invite_history(history: &[InviteHistoryRow]) -> Element<'_, Message> {
         .into()
 }
 
+#[allow(dead_code)]
 fn format_activity(activity: &Activity, people: &HashMap<String, String>) -> String {
     use crate::services::drive::{Actor, User};
 
@@ -589,8 +590,8 @@ fn render_audit_log_panel(screen: &OrgDashboardScreen) -> Element<'_, Message> {
     })
     .padding(10);
 
-    if !screen.audit_log_loading && screen.audit_log_next_page.is_some()
-        || screen.audit_log_entries.is_empty() && !screen.audit_log_loading
+    if (screen.audit_log_entries.is_empty() || screen.audit_log_next_page.is_some())
+        && !screen.audit_log_loading
     {
         fetch_button = fetch_button.on_press(Message::FetchAuditLogClicked);
     }

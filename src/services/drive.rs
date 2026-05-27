@@ -25,6 +25,7 @@ struct FileListResponse {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct DriveFile {
     pub id: String,
     pub name: String,
@@ -33,6 +34,7 @@ pub struct DriveFile {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct DriveFileWithParent {
     #[serde(flatten)]
     pub(crate) file: DriveFile,
@@ -52,7 +54,7 @@ where
     let time = String::deserialize(deserializer)?;
 
     Ok(chrono::DateTime::parse_from_rfc3339(&time)
-        .map_err(|e| serde::de::Error::custom("Datetime not in RFC339 format"))?
+        .map_err(|_e| serde::de::Error::custom("Datetime not in RFC339 format"))?
         .naive_local())
 }
 
@@ -120,11 +122,13 @@ pub(crate) struct FolderResponse {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) struct FolderResponseList {
     files: Vec<FolderResponse>,
 }
 
 impl DriveService {
+    #[allow(dead_code)]
     pub async fn get_all_objects_bfs(
         root_id: &str,
         access_token: &str,
@@ -169,6 +173,7 @@ impl DriveService {
 
         Ok(all_objects)
     }
+    #[allow(dead_code)]
     pub async fn get_all_subfolders_bfs(
         root_id: &str,
         access_token: &str,
@@ -502,6 +507,7 @@ fn escape_drive_query_string(value: &str) -> String {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub enum Detail {
     Edit(Edit),
     Create(Create),
@@ -541,6 +547,7 @@ pub struct Parent {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct DriveItem {
     pub name: String,
     pub title: String,
@@ -560,6 +567,7 @@ pub struct Rename {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(dead_code)]
 pub struct Restore {
     #[serde(rename = "type")]
     pub restore_type: String, // "UNTRASH"
@@ -576,6 +584,7 @@ pub struct PermissionChange {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub enum Actor {
     User(User),
     Anonymous(serde_json::Value),
@@ -586,6 +595,7 @@ pub enum Actor {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code, clippy::enum_variant_names)]
 pub enum User {
     KnownUser(KnownUser),
     DeletedUser(serde_json::Value),
@@ -618,6 +628,7 @@ pub struct KnownUser {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub enum Target {
     DriveItem(TargetDriveItem),
     Drive(Drive),
@@ -626,6 +637,7 @@ pub enum Target {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct TargetDriveItem {
     pub name: String,
     pub title: String,
@@ -637,6 +649,7 @@ pub struct TargetDriveItem {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct DriveFolder {
     #[serde(rename = "type")]
     pub folder_type: String, // "MY_DRIVE_ROOT" | "SHARED_DRIVE_ROOT" | "STANDARD_FOLDER"
@@ -644,6 +657,7 @@ pub struct DriveFolder {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct Drive {
     pub name: String,
     pub title: String,
@@ -798,6 +812,7 @@ impl fmt::Display for ActivityTime {
 // --- Action ---
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(dead_code)]
 pub struct Action {
     pub detail: Detail,
 }

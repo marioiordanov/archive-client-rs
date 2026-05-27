@@ -33,7 +33,7 @@ impl Cache {
                 e.remove();
                 None
             }
-            dashmap::Entry::Vacant(vacant_entry) => None,
+            dashmap::Entry::Vacant(_vacant_entry) => None,
         }
     }
 

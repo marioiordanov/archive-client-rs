@@ -57,6 +57,7 @@ pub enum ScreenMessage {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum OrgMessage {
     InvitationsLoaded(Result<Vec<crate::app::state::OrgInvitation>, OrgError>),
     OrgCreated(Result<RootFolderEntry, OrgError>),
@@ -90,6 +91,7 @@ pub enum SyncAction {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum SyncMessage {
     InitialSyncCompleted {
         root_dir: PathBuf,
@@ -143,6 +145,7 @@ pub enum SyncMessage {
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum SyncError {
     #[error("Invalid local folder: {0}")]
     InvalidLocalFolder(String),
@@ -158,6 +161,7 @@ pub enum SyncError {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum AuthMessage {
     AccessTokenReceived(Result<AccessTokenResponse, AuthError>),
     AccessTokenRefreshed(Result<RefreshTokenResponse, AuthError>),
@@ -165,6 +169,7 @@ pub enum AuthMessage {
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum AuthError {
     #[error("Sign-in cancelled by user")]
     CancelledByUser,

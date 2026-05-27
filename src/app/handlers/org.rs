@@ -191,6 +191,7 @@ impl ArchiveClient {
         Self::load_dashboard_task(org_id, access_token)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn on_dashboard_invite_user_finished_ok(
         state: &mut crate::app::state::AppState,
         screen: &mut screens::org_dashboard::OrgDashboardScreen,

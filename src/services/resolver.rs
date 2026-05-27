@@ -51,6 +51,7 @@ impl Resolver {
         self.local_storage.read().await.save();
     }
 
+    #[allow(dead_code)]
     pub(crate) fn try_save_on_local(&self) {
         if let Ok(file_index) = self.local_storage.try_read() {
             file_index.save();

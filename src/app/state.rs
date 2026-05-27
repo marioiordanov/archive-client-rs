@@ -72,6 +72,7 @@ pub struct AppState {
 #[derive(Default)]
 pub struct SessionState {
     pub user: UserProfile,
+    #[allow(dead_code)]
     pub auth: AuthState,
 }
 

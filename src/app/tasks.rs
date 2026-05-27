@@ -227,7 +227,7 @@ impl ArchiveClient {
                 match poll!(&mut id_result_future) {
                     Poll::Pending => {
                         if let Some(sender) = sender_option {
-                            sender.send(LoadingRevisions::Loading);
+                            let _ = sender.send(LoadingRevisions::Loading);
                         }
 
                         let id_result = id_result_future.await.map_err(|e| match e {
@@ -270,7 +270,7 @@ impl ArchiveClient {
                     }
                     Poll::Ready(Err(SyncError::Common(CommonServiceError::TokenExpired(ref token)))) => {
                         if let Some(sender) = sender_option {
-                            sender.send(LoadingRevisions::Loading);
+                            let _ = sender.send(LoadingRevisions::Loading);
                         }
 
                         Err((
@@ -283,7 +283,7 @@ impl ArchiveClient {
                     }
                     Poll::Ready(Err(err)) => {
                         if let Some(sender) = sender_option {
-                            sender.send(LoadingRevisions::Error);
+                            let _ = sender.send(LoadingRevisions::Error);
                         }
 
                         if let SyncError::Common(c) = err {
@@ -310,13 +310,13 @@ impl ArchiveClient {
                             let revisions = revisions.into_iter().map(|r| FileWithRevision::new( id.clone(),  r )).collect();
 
                             if let Some(sender) = sender_option {
-                                sender.send(LoadingRevisions::Loaded(revisions));
+                                let _ = sender.send(LoadingRevisions::Loaded(revisions));
                             }
 
                             Ok(())
                         }else {
                             if let Some(sender) = sender_option {
-                                sender.send(LoadingRevisions::Loading);
+                                let _ = sender.send(LoadingRevisions::Loading);
                             }
                             let mut revisions: Vec<DriveRevision> =
                             match DriveService::list_revisions(&id, &access_token).await {
@@ -390,7 +390,7 @@ impl ArchiveClient {
                     let file_name = format!("{modified_time}-{file_name}");
                     let parent = root_dir.join(".archived");
                     if !parent.exists() {
-                        tokio::fs::create_dir(&parent).await;
+                        let _ = tokio::fs::create_dir(&parent).await;
                     }
 
                     let file_path = parent.join(&file_name);

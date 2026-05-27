@@ -3,10 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use iced::{
-    Task,
-    futures::StreamExt,
-};
+use iced::Task;
 
 use crate::{
     ArchiveClient, UserState,
@@ -79,7 +76,7 @@ impl ArchiveClient {
                 )
             }
             (
-                UserState::OrgSynced { resolver, .. },
+                UserState::OrgSynced { resolver: _, .. },
                 Screen::OrgSync(screen),
                 SyncMessage::UploadFinished { path, result },
             ) => match result {
@@ -210,7 +207,7 @@ impl ArchiveClient {
                 Screen::OrgSync(screen),
                 SyncMessage::RemoveFinished {
                     path,
-                    object_was_on_remote,
+                    object_was_on_remote: _,
                     result: Err(e),
                 },
             ) => {
@@ -271,7 +268,7 @@ impl ArchiveClient {
     }
 
     fn on_sync_actions(
-        screen: &mut screens::org_sync::OrgSyncScreen,
+        _screen: &mut screens::org_sync::OrgSyncScreen,
         actions: Vec<SyncAction>,
         root_dir: PathBuf,
         org_id: String,
@@ -344,7 +341,7 @@ impl ArchiveClient {
                 .unwrap_or(Task::none())
                 .chain(Task::perform(
                     async move { resolver.save_on_local().await },
-                    |s| (Message::Sync(SyncMessage::BatchCompleted)),
+                    |_s| (Message::Sync(SyncMessage::BatchCompleted)),
                 ))
         }
     }
@@ -468,7 +465,7 @@ impl ArchiveClient {
     pub(crate) async fn upload(
         resolver: Resolver,
         path: PathBuf,
-        root_dir: PathBuf,
+        _root_dir: PathBuf,
         root_dir_id: String,
         access_token: String,
     ) -> Result<String, SyncError> {
@@ -510,6 +507,7 @@ impl ArchiveClient {
         }
     }
 
+    #[allow(dead_code)]
     pub fn open_revision_task(
         org_id: String,
         access_token: String,
@@ -611,12 +609,14 @@ impl ArchiveClient {
     }
 }
 
+#[allow(dead_code)]
 fn is_path_under_root(path: &Path, root: &Path) -> bool {
     let root_abs = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let path_abs = absolutize(path, root);
     path_abs.starts_with(root_abs)
 }
 
+#[allow(dead_code)]
 fn absolutize(path: &Path, root: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -625,6 +625,7 @@ fn absolutize(path: &Path, root: &Path) -> PathBuf {
     }
 }
 
+#[allow(dead_code)]
 fn build_archived_output_path(original: &Path, revision_id: &str) -> PathBuf {
     let parent = original.parent().unwrap_or_else(|| Path::new("."));
     let stem = original
@@ -653,6 +654,7 @@ fn build_archived_output_path(original: &Path, revision_id: &str) -> PathBuf {
     candidate
 }
 
+#[allow(dead_code)]
 fn sanitize_filename_component(value: &str) -> String {
     value
         .chars()
@@ -666,6 +668,7 @@ fn sanitize_filename_component(value: &str) -> String {
         .collect()
 }
 
+#[allow(dead_code)]
 fn open_local_file(path: &Path) -> Result<(), SyncError> {
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("open")

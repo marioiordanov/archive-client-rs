@@ -45,7 +45,7 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                         path: msg_parts.last().unwrap().into(),
                                         sender: Some(Box::new(tx)),
                                     };
-                                    output.send(Message::UnixSocket(cmd)).await;
+                                    let _ = output.send(Message::UnixSocket(cmd)).await;
 
                                     match rx.await {
                                         Ok(LoadingRevisions::Loaded(revisions)) => {
@@ -82,7 +82,7 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                         sender: Box::new(tx),
                                     };
 
-                                    output.send(Message::UnixSocket(cmd)).await;
+                                    let _ = output.send(Message::UnixSocket(cmd)).await;
 
                                     if let Ok(path) = rx.await {
                                         let _ = tokio::io::AsyncWriteExt::write(
@@ -110,6 +110,7 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
     .boxed()
 }
 
+#[allow(clippy::ptr_arg)]
 fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Message> {
     let dir_root = dir_root.clone();
     // `stream::channel` expects a closure that returns an async block (a Future)

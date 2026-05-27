@@ -3,7 +3,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use iced::widget::sensor::Key;
 use serde::{Deserialize, Serialize};
 
 use crate::services::local_storage::{LocalStorageService, ObjectType};
@@ -63,7 +62,7 @@ impl FileIndex {
                 for child in children {
                     if let Some(child_name) = self
                         .entries
-                        .get(&child.to_string())
+                        .get(*child)
                         .map(|c| c.name.as_str())
                     {
                         stack.push((*child, path.join(child_name)));
@@ -141,14 +140,14 @@ impl FileIndex {
         }
     }
 
-    fn get_parent_id(&self, path: &PathBuf) -> String {
+    fn get_parent_id(&self, path: &Path) -> String {
         let root_relative_path = Path::new("");
         match path.parent() {
             Some(parent_path) if parent_path.eq(root_relative_path) => self.root_dir_id.clone(),
             Some(parent_path) => {
                 // safe to unwrap here, because
                 self.by_path
-                    .get(&parent_path.to_path_buf())
+                    .get(parent_path)
                     .unwrap()
                     .clone()
             }

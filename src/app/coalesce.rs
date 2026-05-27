@@ -93,6 +93,7 @@ impl std::fmt::Debug for BitFlag {
 struct IdEntry<'a> {
     action: BitFlag,
     initial_path: &'a Path,
+    #[allow(dead_code)]
     initial_inode: u64,
     is_folder: bool,
     current_path: &'a Path,
@@ -690,6 +691,7 @@ impl<'a> EventsTransaction<'a> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_sync_actions(self) -> Vec<SyncAction> {
         let mut actions = vec![];
         for entry in self.id_to_entry.into_values() {

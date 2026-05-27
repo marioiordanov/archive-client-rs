@@ -5,6 +5,7 @@ use iced::{Alignment, Element, Length};
 use crate::app::message::ScreenMessage;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum Message {
     LocalFolderChanged(String),
     SaveMappingClicked,
