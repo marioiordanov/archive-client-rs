@@ -1,6 +1,19 @@
 use std::collections::HashMap;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
+fn file_id(path: &Path) -> u64 {
+    #[cfg(unix)]
+    {
+        path.metadata().unwrap().ino()
+    }
+    #[cfg(windows)]
+    {
+        file_id::get_file_id(path).unwrap_or(0)
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct FsIndex {
@@ -35,11 +48,11 @@ impl FsIndex {
             if path.is_symlink() || path.is_relative() {
                 continue;
             } else if path.is_file() {
-                let inode = path.metadata().unwrap().ino();
+                let inode = file_id(&path);
                 paths.push((path.clone(), inode));
                 dir_children.push((path, inode));
             } else if path.is_dir() {
-                let inode = path.metadata().unwrap().ino();
+                let inode = file_id(&path);
                 paths.push((path.clone(), inode));
                 dir_children.push((path.clone(), inode));
                 paths.append(&mut FsIndex::walk_dir(&path, direct_children));

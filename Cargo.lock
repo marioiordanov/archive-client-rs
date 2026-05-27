@@ -148,6 +148,7 @@ dependencies = [
  "dashmap",
  "dotenvy",
  "env_logger",
+ "file-id",
  "fs_watcher",
  "http-body-util",
  "hyper",
