@@ -655,8 +655,28 @@ impl<'a> EventsTransaction<'a> {
                 self.path_to_id.insert(path, id);
                 self.inode_to_id.insert(inode, id);
             }
-            // TODO case when creating a file with the same name, that was already deleted
-            _ => panic!("Impossible case"),
+            // a file is returned back to the watched directory with created event (WINDOWS)
+            (None, Some(id)) => {
+                let entry = self.id_to_entry.get_mut(id).expect("Id must be present");
+                entry.action.remove_flag(REMOVED);
+                entry.action.merge(CREATED);
+                self.path_to_id.remove(&entry.current_path);
+                entry.current_path = path;
+            }
+            // a file with the same name is added again to the directory (WINDOWS)
+            (Some(id), None) => {
+                let entry = self.id_to_entry.get_mut(id).expect("Id must be present");
+                entry.action.remove_flag(REMOVED);
+                entry.action.merge(CREATED);
+                self.inode_to_id.remove(&entry.current_inode);
+                entry.current_inode = inode;
+            }
+            // the file is returned back to the same locatio (WINDOWS)
+            (Some(id), Some(..)) => {
+                let entry = self.id_to_entry.get_mut(id).expect("Id must be present");
+                entry.action.remove_flag(REMOVED);
+                entry.action.merge(CREATED);
+            }
         }
     }
 

@@ -271,16 +271,39 @@ impl ArchiveClient {
             ) => Task::perform(
                 async {
                     tokio::task::spawn_blocking(|| {
-                        let out = std::process::Command::new("osascript")
-                            .args(["-e", "POSIX path of (choose folder)"])
-                            .output()
-                            .ok()?;
-                        out.status
-                            .success()
-                            .then(|| String::from_utf8(out.stdout).ok())
-                            .flatten()
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
+                        #[cfg(target_os = "macos")]
+                        {
+                            let out = std::process::Command::new("osascript")
+                                .args(["-e", "POSIX path of (choose folder)"])
+                                .output()
+                                .ok()?;
+                            out.status
+                                .success()
+                                .then(|| String::from_utf8(out.stdout).ok())
+                                .flatten()
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                        }
+                        #[cfg(windows)]
+                        {
+                            let script = "Add-Type -AssemblyName System.Windows.Forms; \
+                                          $f = New-Object System.Windows.Forms.FolderBrowserDialog; \
+                                          if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }";
+                            let out = std::process::Command::new("powershell")
+                                .args(["-NoProfile", "-Command", script])
+                                .output()
+                                .ok()?;
+                            out.status
+                                .success()
+                                .then(|| String::from_utf8(out.stdout).ok())
+                                .flatten()
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                        }
+                        #[cfg(not(any(target_os = "macos", windows)))]
+                        {
+                            None
+                        }
                     })
                     .await
                     .ok()
@@ -299,7 +322,7 @@ impl ArchiveClient {
                     screens::org_sync::Message::FolderSelected(Some(path)),
                 )),
             ) => {
-                println!("folder selected");
+                println!("folder selected {path}");
                 let path_buf = std::path::PathBuf::from(&path);
                 if !path_buf.exists() || !path_buf.is_dir() {
                     return Task::none();
@@ -313,7 +336,10 @@ impl ArchiveClient {
                     org.config.local_folder_path = Some(path.clone());
                 });
 
+                #[cfg(target_os = "macos")]
                 let _ = std::process::Command::new("open").arg(&path).spawn();
+                #[cfg(windows)]
+                let _ = std::process::Command::new("explorer").arg(&path).spawn();
 
                 let watch_task = if let UserState::OrgJoined {
                     root_folder_id,
