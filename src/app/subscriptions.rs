@@ -120,10 +120,16 @@ fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Mes
         100,
         move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
             // scan root directory to obtain inodes of files/folders
+            let excluded = if cfg!(windows) {
+                dir_root.join(".archived\\")
+            } else {
+                dir_root.join(".archived/")
+            };
+            
             let watcher = fs_watcher::AsyncWatcher::spawn(
                 dir_root.as_path(),
                 0.5,
-                &[dir_root.join(".archived/").to_string_lossy().as_ref()],
+                &[excluded.to_string_lossy().as_ref()],
             )
             .await;
             let (mut w, mut events) = match watcher {
