@@ -13,9 +13,9 @@ fn file_id(path: &Path) -> u64 {
     {
         use file_id::FileId::{self};
 
-        if let Some(FileId::LowRes{file_index, ..}) = file_id::get_low_res_file_id(path).ok() {
+        if let Some(FileId::LowRes { file_index, .. }) = file_id::get_low_res_file_id(path).ok() {
             file_index
-        }else {
+        } else {
             0
         }
     }

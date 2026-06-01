@@ -162,16 +162,19 @@ impl ArchiveClient {
                 },
                 Intent::ExternalRequest { cmd },
             ) => match cmd {
-                UnixSocketCommand::GetFileRevisions { path, sender } => {
-                    Self::get_file_revisions_task(
-                        path,
-                        sender,
-                        root_folder_id.clone(),
-                        resolver.clone(),
-                        user_data.access_token.clone(),
-                        revisions_cache.clone()
-                    )
-                }
+                UnixSocketCommand::GetFileRevisions {
+                    path,
+                    force_refresh,
+                    sender,
+                } => Self::get_file_revisions_task(
+                    path,
+                    force_refresh,
+                    sender,
+                    root_folder_id.clone(),
+                    resolver.clone(),
+                    user_data.access_token.clone(),
+                    revisions_cache.clone(),
+                ),
                 UnixSocketCommand::DownloadFileAtPath {
                     file_id,
                     revision_id,

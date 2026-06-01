@@ -13,10 +13,7 @@ mod ui_error;
 use crate::{
     app::{
         message::Message,
-        state::{
-            AppState, Intent, OrgState, Role, Screen, SessionState, UserData,
-            UserProfile,
-        },
+        state::{AppState, Intent, OrgState, Role, Screen, SessionState, UserData, UserProfile},
         subscriptions::tcp_server_subscription,
     },
     services::{
@@ -306,8 +303,6 @@ impl ArchiveClient {
             | crate::UserState::OrgJoined { user_data, .. }
             | crate::UserState::OrgSynced { user_data, .. } => &user_data.email,
         };
-
-        
 
         match &self.screen {
             app::state::Screen::SignIn(screen) => screen.view().map(|m| Message::Screen(m.into())),

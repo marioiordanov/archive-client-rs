@@ -1,14 +1,17 @@
 use std::{path::PathBuf, time::Duration};
 
+use iced::Subscription;
 use iced::futures::{SinkExt, StreamExt};
 use iced::stream;
-use iced::Subscription;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 
 use crate::app::coalesce;
 use crate::app::fs_index::FsIndex;
 use crate::app::message::{LoadingRevisions, Message, SyncMessage, UnixSocketCommand};
+const GET_REVISIONS: &str = "revisions";
+const REFRESH_REVISIONS: &str = "refresh";
+const DOWNLOAD_REVISION: &str = "download";
 
 const ARCHIVE_WINDOW: Duration = Duration::from_secs(15); // 15 minutes
 const MAX_ARCHIVE_WINDOW: Duration = Duration::from_secs(3600 * 2);
@@ -39,17 +42,23 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                             let msg_parts: Vec<&str> = msg.split("@@").map(|s| s.trim()).collect();
                             let command = msg_parts.first().cloned();
                             match command {
-                                Some("revisions") if msg_parts.last().is_some() => {
+                                Some(GET_REVISIONS) | Some(REFRESH_REVISIONS)
+                                    if msg_parts.last().is_some() =>
+                                {
                                     let (tx, rx) = tokio::sync::oneshot::channel();
                                     let cmd = UnixSocketCommand::GetFileRevisions {
                                         path: msg_parts.last().unwrap().into(),
+                                        force_refresh: command
+                                            .map(|v| v.eq(REFRESH_REVISIONS))
+                                            .unwrap_or_default(),
                                         sender: Some(Box::new(tx)),
                                     };
                                     let _ = output.send(Message::UnixSocket(cmd)).await;
 
                                     match rx.await {
                                         Ok(LoadingRevisions::Loaded(revisions)) => {
-                                            let bytes = serde_json::to_vec_pretty(&revisions).unwrap();
+                                            let bytes =
+                                                serde_json::to_vec_pretty(&revisions).unwrap();
                                             tokio::io::AsyncWriteExt::write(&mut stream, &bytes)
                                                 .await
                                                 .unwrap();
@@ -69,7 +78,7 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                         }
                                     }
                                 }
-                                Some("download") if msg_parts.len() == 4 => {
+                                Some(DOWNLOAD_REVISION) if msg_parts.len() == 4 => {
                                     let file_id = msg_parts[1];
                                     let revision_id = msg_parts[2];
                                     let modified_time = msg_parts[3];
@@ -125,7 +134,7 @@ fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Mes
             } else {
                 dir_root.join(".archived/")
             };
-            
+
             let watcher = fs_watcher::AsyncWatcher::spawn(
                 dir_root.as_path(),
                 0.5,

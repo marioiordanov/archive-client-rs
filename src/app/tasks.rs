@@ -1,9 +1,6 @@
 use std::{path::PathBuf, task::Poll};
 
-use iced::{
-    Task,
-    futures::poll,
-};
+use iced::{Task, futures::poll};
 
 use crate::{
     ArchiveClient,
@@ -211,6 +208,7 @@ impl ArchiveClient {
     }
     pub fn get_file_revisions_task(
         path: PathBuf,
+        force_refresh: bool,
         sender_option: Option<Box<tokio::sync::oneshot::Sender<LoadingRevisions>>>,
         root_folder_id: String,
         resolver: Resolver,
@@ -242,6 +240,7 @@ impl ArchiveClient {
                                     e,
                                     Box::new(UnixSocketCommand::GetFileRevisions {
                                         path,
+                                        force_refresh,
                                         sender: None,
                                     }),
                                 ));
@@ -256,30 +255,35 @@ impl ArchiveClient {
                                         e,
                                         Box::new(UnixSocketCommand::GetFileRevisions {
                                             path,
+                                            force_refresh,
                                             sender: None,
                                         }),
                                     ));
                                 }
                             };
 
-                        revisions.sort_by_key(|r|r.modified_time);
+                        revisions.sort_by_key(|r| r.modified_time);
+                        revisions.reverse();
 
                         cache.insert(id, revisions);
 
                         Ok(())
                     }
-                    Poll::Ready(Err(SyncError::Common(CommonServiceError::TokenExpired(ref token)))) => {
+                    Poll::Ready(Err(SyncError::Common(CommonServiceError::TokenExpired(
+                        ref token,
+                    )))) => {
                         if let Some(sender) = sender_option {
                             let _ = sender.send(LoadingRevisions::Loading);
                         }
 
                         Err((
-                                    CommonServiceError::TokenExpired(token.clone()),
-                                    Box::new(UnixSocketCommand::GetFileRevisions {
-                                        path,
-                                        sender: None,
-                                    }),
-                                ))
+                            CommonServiceError::TokenExpired(token.clone()),
+                            Box::new(UnixSocketCommand::GetFileRevisions {
+                                path,
+                                force_refresh,
+                                sender: None,
+                            }),
+                        ))
                     }
                     Poll::Ready(Err(err)) => {
                         if let Some(sender) = sender_option {
@@ -288,52 +292,60 @@ impl ArchiveClient {
 
                         if let SyncError::Common(c) = err {
                             Err((
-                                    c,
-                                    Box::new(UnixSocketCommand::GetFileRevisions {
-                                        path,
-                                        sender: None,
-                                    }),
-                                ))
-                        }else {
+                                c,
+                                Box::new(UnixSocketCommand::GetFileRevisions {
+                                    path,
+                                    force_refresh,
+                                    sender: None,
+                                }),
+                            ))
+                        } else {
                             Err((
-                                    CommonServiceError::Unknown(err.to_string()),
-                                    Box::new(UnixSocketCommand::GetFileRevisions {
-                                        path,
-                                        sender: None,
-                                    }),
-                                ))
+                                CommonServiceError::Unknown(err.to_string()),
+                                Box::new(UnixSocketCommand::GetFileRevisions {
+                                    path,
+                                    force_refresh,
+                                    sender: None,
+                                }),
+                            ))
                         }
                     }
-                    Poll::Ready(Ok(id)) => {
-                        if let Some(mut revisions) = cache.get(id.clone()) {
-                            revisions.sort_by_key(|r|r.modified_time);
-                            let revisions = revisions.into_iter().map(|r| FileWithRevision::new( id.clone(),  r )).collect();
+                    Poll::Ready(Ok(id)) => match cache.get(id.clone()) {
+                        Some(mut revisions) if !force_refresh => {
+                            revisions.sort_by_key(|r| r.modified_time);
+                            revisions.reverse();
+                            let revisions = revisions
+                                .into_iter()
+                                .map(|r| FileWithRevision::new(id.clone(), r))
+                                .collect();
 
                             if let Some(sender) = sender_option {
                                 let _ = sender.send(LoadingRevisions::Loaded(revisions));
                             }
 
                             Ok(())
-                        }else {
+                        }
+                        _ => {
                             if let Some(sender) = sender_option {
                                 let _ = sender.send(LoadingRevisions::Loading);
                             }
                             let mut revisions: Vec<DriveRevision> =
-                            match DriveService::list_revisions(&id, &access_token).await {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    return Err((
-                                        e,
-                                        Box::new(UnixSocketCommand::GetFileRevisions {
-                                            path,
-                                            sender: None,
-                                        }),
-                                    ));
-                                }
-                            };
+                                match DriveService::list_revisions(&id, &access_token).await {
+                                    Ok(r) => r,
+                                    Err(e) => {
+                                        return Err((
+                                            e,
+                                            Box::new(UnixSocketCommand::GetFileRevisions {
+                                                path,
+                                                force_refresh,
+                                                sender: None,
+                                            }),
+                                        ));
+                                    }
+                                };
 
-                            revisions.sort_by_key(|r|r.modified_time);
-
+                            revisions.sort_by_key(|r| r.modified_time);
+                            revisions.reverse();
                             cache.insert(id, revisions);
 
                             Ok(())
@@ -375,6 +387,7 @@ impl ArchiveClient {
                     {
                         Ok(c) => c,
                         Err(e) => {
+                            println!("err downloading revision");
                             return Err((
                                 e,
                                 Box::new(UnixSocketCommand::DownloadFileAtPath {
@@ -387,7 +400,23 @@ impl ArchiveClient {
                         }
                     };
 
-                    let file_name = format!("{modified_time}-{file_name}");
+                    let modified_time_for_path = if cfg!(windows) {
+                        modified_time.replace(':', "-")
+                    } else {
+                        modified_time.clone()
+                    };
+
+                    let file_name = if let Some(extension_idx) = file_name.rfind('.') {
+                        format!(
+                            "{} {}{}",
+                            file_name[..extension_idx].to_string(),
+                            modified_time_for_path,
+                            file_name[extension_idx..].to_string()
+                        )
+                    } else {
+                        format!("{file_name} {modified_time_for_path}")
+                    };
+
                     let parent = root_dir.join(".archived");
                     if !parent.exists() {
                         let _ = tokio::fs::create_dir(&parent).await;
@@ -406,6 +435,14 @@ impl ArchiveClient {
                         ));
                     }
 
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        let _ = std::process::Command::new("explorer")
+                            .raw_arg(format!("/select,{}", file_path.display()))
+                            .spawn();
+                    }
+                    #[cfg(not(windows))]
                     let _ = std::process::Command::new("open")
                         .args(["-R", &file_path.to_string_lossy()])
                         .spawn();

@@ -60,11 +60,7 @@ impl FileIndex {
             self.by_path.insert(path.clone(), id.to_string());
             if let Some(children) = children_map.get(id) {
                 for child in children {
-                    if let Some(child_name) = self
-                        .entries
-                        .get(*child)
-                        .map(|c| c.name.as_str())
-                    {
+                    if let Some(child_name) = self.entries.get(*child).map(|c| c.name.as_str()) {
                         stack.push((*child, path.join(child_name)));
                     }
                 }
@@ -146,10 +142,7 @@ impl FileIndex {
             Some(parent_path) if parent_path.eq(root_relative_path) => self.root_dir_id.clone(),
             Some(parent_path) => {
                 // safe to unwrap here, because
-                self.by_path
-                    .get(parent_path)
-                    .unwrap()
-                    .clone()
+                self.by_path.get(parent_path).unwrap().clone()
             }
             None => {
                 todo!()

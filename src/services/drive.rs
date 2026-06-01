@@ -1,8 +1,4 @@
-use std::{
-    fmt,
-    path::PathBuf,
-    str::FromStr,
-};
+use std::{fmt, path::PathBuf, str::FromStr};
 
 use chrono::NaiveDateTime;
 use reqwest::header;

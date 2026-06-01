@@ -27,13 +27,14 @@ pub enum Message {
 pub(crate) enum LoadingRevisions {
     Loading,
     Loaded(Vec<FileWithRevision>),
-    Error
+    Error,
 }
 
 #[derive(Debug)]
 pub enum UnixSocketCommand {
     GetFileRevisions {
         path: PathBuf,
+        force_refresh: bool,
         sender: Option<Box<tokio::sync::oneshot::Sender<LoadingRevisions>>>,
     },
     DownloadFileAtPath {

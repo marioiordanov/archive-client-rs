@@ -1,4 +1,3 @@
-
 use iced::Task;
 use serde::Serialize;
 
@@ -33,14 +32,19 @@ impl ArchiveClient {
                     revisions_cache,
                     ..
                 },
-                UnixSocketCommand::GetFileRevisions { path, sender },
+                UnixSocketCommand::GetFileRevisions {
+                    path,
+                    force_refresh,
+                    sender,
+                },
             ) => ArchiveClient::get_file_revisions_task(
                 path,
+                force_refresh,
                 sender,
                 root_folder_id.clone(),
                 resolver.clone(),
                 user_data.access_token.clone(),
-                revisions_cache.clone()
+                revisions_cache.clone(),
             ),
             (
                 UserState::OrgSynced {
