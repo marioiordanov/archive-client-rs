@@ -375,12 +375,29 @@ impl ArchiveClient {
                 _,
                 Screen::OrgSync(screen),
                 Message::Screen(ScreenMessage::OrgSync(
-                    msg @ screens::org_sync::Message::DismissRevisions,
+                    msg @ screens::org_sync::Message::DismissRevisions | msg @ screens::org_sync::Message::RevisionClicked { .. },
                 )),
             ) => {
                 screen.update(msg);
                 Task::none()
             }
+            (
+                _,
+                Screen::OrgSync(_),
+                Message::Screen(ScreenMessage::OrgSync(
+                    screens::org_sync::Message::RevisionDoubleClicked {
+                        file_id,
+                        revision_id,
+                        modified_time,
+                    },
+                )),
+            ) => self.handle_unix_socket_commands(
+                crate::app::message::UnixSocketCommand::DownloadRevision {
+                    file_id,
+                    revision_id,
+                    modified_time,
+                },
+            ),
             _ => Task::none(),
         }
     }

@@ -1,6 +1,6 @@
 use iced::alignment::{Horizontal, Vertical};
-use iced::widget::{button, column, container, row, scrollable, text};
-use iced::{Alignment, Element, Length};
+use iced::widget::{button, column, container, mouse_area, row, scrollable, text};
+use iced::{Alignment, Background, Color, Element, Length};
 
 use crate::app::message::{ScreenMessage};
 use crate::app::handlers::external_commands::FileWithRevision;
@@ -14,6 +14,14 @@ pub enum Message {
     BrowseFolderClicked,
     FolderSelected(Option<String>),
     DismissRevisions,
+    RevisionDoubleClicked {
+        file_id: String,
+        revision_id: String,
+        modified_time: String,
+    },
+    RevisionClicked {
+        revision_id: String,
+    }
 }
 
 impl From<Message> for ScreenMessage {
@@ -32,6 +40,7 @@ pub struct OrgSyncScreen {
     pub upload_log: Vec<String>,
 
     pub revisions_panel: Option<Vec<FileWithRevision>>,
+    pub selected_revision: Option<String>,
 }
 
 impl OrgSyncScreen {
@@ -42,10 +51,12 @@ impl OrgSyncScreen {
             status_line: None,
             upload_log: Vec::new(),
             revisions_panel: None,
+            selected_revision: None,
         }
     }
 
     pub fn update(&mut self, message: Message) {
+        println!("{message:?}");
         match message {
             Message::LocalFolderChanged(value) => {
                 self.local_folder_input = value;
@@ -62,8 +73,13 @@ impl OrgSyncScreen {
                 self.mapped_folder = Some(path);
             }
             Message::BrowseFolderClicked | Message::FolderSelected(None) => {}
+            Message::RevisionClicked { revision_id }
+            | Message::RevisionDoubleClicked { revision_id, .. } => {
+                self.selected_revision = Some(revision_id);
+            }
             Message::DismissRevisions => {
                 self.revisions_panel = None;
+                self.selected_revision = None;
             }
         }
     }
@@ -81,7 +97,7 @@ impl OrgSyncScreen {
     }
 
     pub fn view(&self, org_name: &str) -> Element<'_, Message> {
-        let main: Element<Message> = if let Some(folder) = &self.mapped_folder {
+        if let Some(folder) = &self.mapped_folder {
             let log_items = self
                 .upload_log
                 .iter()
@@ -99,19 +115,87 @@ impl OrgSyncScreen {
             ]
             .align_y(Alignment::Center);
 
-            column![
-                text("You are all set!").size(28),
-                text(format!("Tracking: {folder}")).size(13),
-                text(format!("Org: {org_name}")).size(13),
+            let log_panel = column![
                 log_header,
                 container(scrollable(log_items).height(Length::Fill))
                     .padding(8)
                     .width(Length::Fill)
-                    .height(Length::Fill),
+                    .height(Length::Fill)
+                    .style(container::bordered_box),
+            ]
+            .spacing(8)
+            .width(Length::Fill)
+            .height(Length::Fill);
+
+            let mut panels = row![log_panel].spacing(12).height(Length::Fill);
+
+            if let Some(revisions) = &self.revisions_panel {
+                let revision_rows = revisions.iter().fold(column![].spacing(2), |col, r| {
+                    let size_label = r
+                        .revision
+                        .size
+                        .as_deref()
+                        .map(|s| format!("  ({s} bytes)"))
+                        .unwrap_or_default();
+                    let file_id = r.file_id.clone();
+                    let revision_id = r.revision.id.clone();
+                    let modified_time = r.revision.modified_time.to_string();
+                    let is_selected = self.selected_revision.as_deref() == Some(&revision_id);
+                    let label =
+                        text(format!("{}{}", r.revision.modified_time.format("%c"), size_label))
+                            .size(12);
+                    let row = container(
+                        mouse_area(label)
+                            .on_press(Message::RevisionClicked {
+                                revision_id: revision_id.clone(),
+                            })
+                            .on_double_click(Message::RevisionDoubleClicked {
+                                file_id,
+                                revision_id,
+                                modified_time,
+                            }),
+                    )
+                    .padding([4, 6])
+                    .width(Length::Fill)
+                    .style(move |_theme: &iced::Theme| container::Style {
+                        background: is_selected
+                            .then_some(Background::Color(Color::from_rgba(0.2, 0.5, 1.0, 0.25))),
+                        ..Default::default()
+                    });
+                    col.push(row)
+                });
+
+                let revisions_panel = column![
+                    row![
+                        text("Revisions").size(15).width(Length::Fill),
+                        button("Close")
+                            .padding([4, 10])
+                            .on_press(Message::DismissRevisions),
+                    ]
+                    .align_y(Alignment::Center),
+                    container(scrollable(revision_rows).height(Length::Fill))
+                        .padding(8)
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .style(container::bordered_box),
+                ]
+                .spacing(8)
+                .width(300)
+                .height(Length::Fill);
+
+                panels = panels.push(revisions_panel);
+            }
+
+            column![
+                text("You are all set!").size(28),
+                text(format!("Tracking: {folder}")).size(13),
+                text(format!("Org: {org_name}")).size(13),
+                panels,
             ]
             .spacing(12)
             .padding(24)
             .width(Length::Fill)
+            .height(Length::Fill)
             .into()
         } else {
             container(
@@ -129,44 +213,6 @@ impl OrgSyncScreen {
             .align_x(Horizontal::Center)
             .align_y(Vertical::Center)
             .into()
-        };
-
-        let content: Element<Message> = if let Some(revisions) = &self.revisions_panel {
-            let revision_rows = revisions.iter().fold(column![].spacing(6), |col, r| {
-                let size_label = r
-                    .revision.size
-                    .as_deref()
-                    .map(|s| format!("  ({s} bytes)"))
-                    .unwrap_or_default();
-                col.push(text(format!("{}{}", r.revision.modified_time.format("%c"), size_label)).size(12))
-            });
-
-            let panel = column![
-                row![
-                    text("Revisions").size(15).width(Length::Fill),
-                    button("Close")
-                        .padding([4, 10])
-                        .on_press(Message::DismissRevisions),
-                ]
-                .align_y(Alignment::Center),
-                container(scrollable(revision_rows).height(Length::Fill))
-                    .padding(8)
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            ]
-            .spacing(8)
-            .padding(16)
-            .width(300)
-            .height(Length::Fill);
-
-            row![main, panel].into()
-        } else {
-            main
-        };
-
-        container(content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        }
     }
 }
