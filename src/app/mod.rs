@@ -1,6 +1,6 @@
 pub(crate) mod coalesce;
 mod fs_index;
-mod handlers;
+pub(crate) mod handlers;
 pub mod message;
 mod message_handler;
 pub(crate) mod state;

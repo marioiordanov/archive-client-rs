@@ -2,7 +2,8 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Alignment, Element, Length};
 
-use crate::app::message::ScreenMessage;
+use crate::app::message::{ScreenMessage};
+use crate::app::handlers::external_commands::FileWithRevision;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -12,6 +13,7 @@ pub enum Message {
     ClearLogClicked,
     BrowseFolderClicked,
     FolderSelected(Option<String>),
+    DismissRevisions,
 }
 
 impl From<Message> for ScreenMessage {
@@ -28,6 +30,8 @@ pub struct OrgSyncScreen {
 
     pub status_line: Option<String>,
     pub upload_log: Vec<String>,
+
+    pub revisions_panel: Option<Vec<FileWithRevision>>,
 }
 
 impl OrgSyncScreen {
@@ -37,6 +41,7 @@ impl OrgSyncScreen {
             mapped_folder,
             status_line: None,
             upload_log: Vec::new(),
+            revisions_panel: None,
         }
     }
 
@@ -57,7 +62,14 @@ impl OrgSyncScreen {
                 self.mapped_folder = Some(path);
             }
             Message::BrowseFolderClicked | Message::FolderSelected(None) => {}
+            Message::DismissRevisions => {
+                self.revisions_panel = None;
+            }
         }
+    }
+
+    pub fn set_revisions(&mut self, revisions: Vec<FileWithRevision>) {
+        self.revisions_panel = Some(revisions);
     }
 
     pub fn push_log(&mut self, line: impl Into<String>) {
@@ -69,7 +81,7 @@ impl OrgSyncScreen {
     }
 
     pub fn view(&self, org_name: &str) -> Element<'_, Message> {
-        let content: Element<Message> = if let Some(folder) = &self.mapped_folder {
+        let main: Element<Message> = if let Some(folder) = &self.mapped_folder {
             let log_items = self
                 .upload_log
                 .iter()
@@ -117,6 +129,39 @@ impl OrgSyncScreen {
             .align_x(Horizontal::Center)
             .align_y(Vertical::Center)
             .into()
+        };
+
+        let content: Element<Message> = if let Some(revisions) = &self.revisions_panel {
+            let revision_rows = revisions.iter().fold(column![].spacing(6), |col, r| {
+                let size_label = r
+                    .revision.size
+                    .as_deref()
+                    .map(|s| format!("  ({s} bytes)"))
+                    .unwrap_or_default();
+                col.push(text(format!("{}{}", r.revision.modified_time.format("%c"), size_label)).size(12))
+            });
+
+            let panel = column![
+                row![
+                    text("Revisions").size(15).width(Length::Fill),
+                    button("Close")
+                        .padding([4, 10])
+                        .on_press(Message::DismissRevisions),
+                ]
+                .align_y(Alignment::Center),
+                container(scrollable(revision_rows).height(Length::Fill))
+                    .padding(8)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            ]
+            .spacing(8)
+            .padding(16)
+            .width(300)
+            .height(Length::Fill);
+
+            row![main, panel].into()
+        } else {
+            main
         };
 
         container(content)

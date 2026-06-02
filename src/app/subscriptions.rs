@@ -12,6 +12,7 @@ use crate::app::message::{LoadingRevisions, Message, SyncMessage, UnixSocketComm
 const GET_REVISIONS: &str = "revisions";
 const REFRESH_REVISIONS: &str = "refresh";
 const DOWNLOAD_REVISION: &str = "download";
+const SHOW_ALL_REVISIONS: &str = "all";
 
 const ARCHIVE_WINDOW: Duration = Duration::from_secs(15); // 15 minutes
 const MAX_ARCHIVE_WINDOW: Duration = Duration::from_secs(3600 * 2);
@@ -41,6 +42,7 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                             let msg = String::from_utf8(buf).unwrap();
                             let msg_parts: Vec<&str> = msg.split("@@").map(|s| s.trim()).collect();
                             let command = msg_parts.first().cloned();
+                            println!("{msg}");
                             match command {
                                 Some(GET_REVISIONS) | Some(REFRESH_REVISIONS)
                                     if msg_parts.last().is_some() =>
@@ -77,6 +79,12 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                                 .unwrap();
                                         }
                                     }
+                                }
+                                Some(SHOW_ALL_REVISIONS) if msg_parts.last().is_some() => {
+                                    let cmd = UnixSocketCommand::ShowAllRevisions {
+                                        path: msg_parts.last().unwrap().into(),
+                                    };
+                                    let _ = output.send(Message::UnixSocket(cmd)).await;
                                 }
                                 Some(DOWNLOAD_REVISION) if msg_parts.len() == 4 => {
                                     let file_id = msg_parts[1];

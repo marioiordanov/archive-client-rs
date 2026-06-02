@@ -7,7 +7,7 @@ use crate::{
     screens,
     services::{
         auth::{AccessTokenResponse, RefreshTokenResponse},
-        drive::DriveFile,
+        drive::{DriveFile},
         file_index::FileIndex,
         org::{DashboardRowData, RootFolderEntry},
     },
@@ -36,6 +36,9 @@ pub enum UnixSocketCommand {
         path: PathBuf,
         force_refresh: bool,
         sender: Option<Box<tokio::sync::oneshot::Sender<LoadingRevisions>>>,
+    },
+    ShowAllRevisions {
+        path: PathBuf,
     },
     DownloadFileAtPath {
         file_id: String,
@@ -138,6 +141,8 @@ pub enum SyncMessage {
         path: String,
         result: Result<String, SyncError>,
     },
+
+    AllRevisionsLoaded(Vec<FileWithRevision>),
     RemoveFinished {
         path: PathBuf,
         object_was_on_remote: bool,

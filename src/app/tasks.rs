@@ -1,6 +1,6 @@
 use std::{path::PathBuf, task::Poll};
 
-use iced::{Task, futures::poll};
+use iced::{Task, futures::{ poll}};
 
 use crate::{
     ArchiveClient,
@@ -8,13 +8,13 @@ use crate::{
         self,
         handlers::external_commands::FileWithRevision,
         message::{
-            CommonServiceError, LoadingRevisions, Message, OrgMessage, SyncError, SyncMessage,
-            UnixSocketCommand,
+            CommonServiceError, LoadingRevisions, Message, OrgMessage, SyncError,
+            SyncMessage, UnixSocketCommand,
         },
     },
     services::{
         auth::AuthService,
-        drive::{DriveRevision, DriveService},
+        drive::{ DriveService},
         org::OrgService,
         resolver::Resolver,
         revisions_cache::Cache,
@@ -206,6 +206,137 @@ impl ArchiveClient {
             })
         })
     }
+    pub fn show_all_revisions_task(
+        path: PathBuf,
+        root_folder_id: String,
+        resolver: Resolver,
+        access_token: String,
+        cache: Cache,
+    ) -> Task<Message> {
+        let revisions_future = Self::get_file_revisions(path.clone(), true, None, root_folder_id, resolver, access_token, cache);
+        Task::perform(
+                revisions_future
+            ,
+            |result: Result<Vec<FileWithRevision>, CommonServiceError>| match result {
+                Ok(revisions) => Message::Sync(SyncMessage::AllRevisionsLoaded(revisions)),
+                Err(e) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
+                    command: Some(Box::new(UnixSocketCommand::ShowAllRevisions { path })),
+                    error: Some(e),
+                }),
+            },
+        )
+    }
+
+    async fn fetch_and_cache_file_revisions(
+        file_id: String,
+        force_refresh: bool,
+        access_token: String,
+        cache: Cache,
+    ) -> Result<Vec<FileWithRevision>, CommonServiceError> {
+        let revisions = match cache.get(file_id.clone()) {
+            Some(revisions) if !force_refresh => revisions,
+            _ => {
+                let mut fetched = DriveService::list_revisions(&file_id, &access_token).await?;
+                fetched.sort_by_key(|r| r.modified_time);
+                fetched.reverse();
+                cache.insert(file_id.clone(), fetched.clone());
+
+                fetched
+            }
+        };
+
+        let revisions = revisions
+            .into_iter()
+            .map(|r| FileWithRevision::new(file_id.clone(), r))
+            .collect();
+
+        Ok(revisions)
+    }
+
+    pub async fn get_file_revisions(
+        path: PathBuf,
+        force_refresh: bool,
+        sender_option: Option<Box<tokio::sync::oneshot::Sender<LoadingRevisions>>>,
+        root_folder_id: String,
+        resolver: Resolver,
+        access_token: String,
+        cache: Cache,
+    ) -> Result<Vec<FileWithRevision>, CommonServiceError> {
+        let id_result_future =
+            resolver.resolve_path(path.clone(), root_folder_id, access_token.clone());
+
+        // TODO: use this syntax
+        // let c = resolver.resolve_path(path.clone(), root_folder_id, access_token.clone())
+        // .map_err(|e| match e {
+        //             SyncError::Common(c) => c,
+        //             o => CommonServiceError::Unknown(o.to_string()),
+        //         }).and_then(|id| async move {Self::fetch_file_revisions(id, force_refresh, access_token, cache).await});
+
+        tokio::pin!(id_result_future);
+
+        match poll!(&mut id_result_future) {
+            Poll::Pending => {
+                if let Some(sender) = sender_option {
+                    let _ = sender.send(LoadingRevisions::Loading);
+                }
+                let id = id_result_future.await.map_err(|e| match e {
+                    SyncError::Common(c) => c,
+                    o => CommonServiceError::Unknown(o.to_string()),
+                })?;
+
+                Self::fetch_and_cache_file_revisions(id, force_refresh, access_token, cache).await
+            }
+            Poll::Ready(Err(e)) => {
+                if let Some(sender) = sender_option {
+                    if let SyncError::Common(CommonServiceError::TokenExpired(..)) = e {
+                        let _ = sender.send(LoadingRevisions::Loading);
+                    } else {
+                        let _ = sender.send(LoadingRevisions::Error);
+                    }
+                }
+
+                let common_error = match e {
+                    SyncError::Common(c) => c,
+                    o => CommonServiceError::Unknown(o.to_string()),
+                };
+
+                Err(common_error)
+            }
+            Poll::Ready(Ok(id)) => {
+                let revisions_result_future =
+                    Self::fetch_and_cache_file_revisions(id, force_refresh, access_token, cache);
+                tokio::pin!(revisions_result_future);
+
+                match poll!(&mut revisions_result_future) {
+                    Poll::Ready(Ok(revisions)) => {
+                        if let Some(sender) = sender_option {
+                            let _ = sender.send(LoadingRevisions::Loaded(revisions.clone()));
+                        }
+
+                        Ok(revisions)
+                    }
+                    Poll::Ready(Err(e)) => {
+                        if let Some(sender) = sender_option {
+                            if let CommonServiceError::TokenExpired(..) = e {
+                                let _ = sender.send(LoadingRevisions::Loading);
+                            } else {
+                                let _ = sender.send(LoadingRevisions::Error);
+                            }
+                        }
+
+                        Err(e)
+                    }
+                    Poll::Pending => {
+                        if let Some(sender) = sender_option {
+                            let _ = sender.send(LoadingRevisions::Loading);
+                        }
+                        revisions_result_future.await
+                    }
+                }
+            }
+        }
+    }
+
     pub fn get_file_revisions_task(
         path: PathBuf,
         force_refresh: bool,
@@ -215,151 +346,29 @@ impl ArchiveClient {
         access_token: String,
         cache: Cache,
     ) -> Task<Message> {
+        let path_for_retry = path.clone();
+        let get_revisions_future = Self::get_file_revisions(
+            path,
+            force_refresh,
+            sender_option,
+            root_folder_id,
+            resolver,
+            access_token,
+            cache,
+        );
         Task::perform(
-            async move {
-                let id_result_future =
-                    resolver.resolve_path(path.clone(), root_folder_id, access_token.clone());
-
-                tokio::pin!(id_result_future);
-
-                match poll!(&mut id_result_future) {
-                    Poll::Pending => {
-                        if let Some(sender) = sender_option {
-                            let _ = sender.send(LoadingRevisions::Loading);
-                        }
-
-                        let id_result = id_result_future.await.map_err(|e| match e {
-                            SyncError::Common(e) => e,
-                            other => CommonServiceError::Unknown(other.to_string()),
-                        });
-
-                        let id = match id_result {
-                            Ok(id) => id,
-                            Err(e) => {
-                                return Err((
-                                    e,
-                                    Box::new(UnixSocketCommand::GetFileRevisions {
-                                        path,
-                                        force_refresh,
-                                        sender: None,
-                                    }),
-                                ));
-                            }
-                        };
-
-                        let mut revisions: Vec<DriveRevision> =
-                            match DriveService::list_revisions(&id, &access_token).await {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    return Err((
-                                        e,
-                                        Box::new(UnixSocketCommand::GetFileRevisions {
-                                            path,
-                                            force_refresh,
-                                            sender: None,
-                                        }),
-                                    ));
-                                }
-                            };
-
-                        revisions.sort_by_key(|r| r.modified_time);
-                        revisions.reverse();
-
-                        cache.insert(id, revisions);
-
-                        Ok(())
-                    }
-                    Poll::Ready(Err(SyncError::Common(CommonServiceError::TokenExpired(
-                        ref token,
-                    )))) => {
-                        if let Some(sender) = sender_option {
-                            let _ = sender.send(LoadingRevisions::Loading);
-                        }
-
-                        Err((
-                            CommonServiceError::TokenExpired(token.clone()),
-                            Box::new(UnixSocketCommand::GetFileRevisions {
-                                path,
-                                force_refresh,
-                                sender: None,
-                            }),
-                        ))
-                    }
-                    Poll::Ready(Err(err)) => {
-                        if let Some(sender) = sender_option {
-                            let _ = sender.send(LoadingRevisions::Error);
-                        }
-
-                        if let SyncError::Common(c) = err {
-                            Err((
-                                c,
-                                Box::new(UnixSocketCommand::GetFileRevisions {
-                                    path,
-                                    force_refresh,
-                                    sender: None,
-                                }),
-                            ))
-                        } else {
-                            Err((
-                                CommonServiceError::Unknown(err.to_string()),
-                                Box::new(UnixSocketCommand::GetFileRevisions {
-                                    path,
-                                    force_refresh,
-                                    sender: None,
-                                }),
-                            ))
-                        }
-                    }
-                    Poll::Ready(Ok(id)) => match cache.get(id.clone()) {
-                        Some(mut revisions) if !force_refresh => {
-                            revisions.sort_by_key(|r| r.modified_time);
-                            revisions.reverse();
-                            let revisions = revisions
-                                .into_iter()
-                                .map(|r| FileWithRevision::new(id.clone(), r))
-                                .collect();
-
-                            if let Some(sender) = sender_option {
-                                let _ = sender.send(LoadingRevisions::Loaded(revisions));
-                            }
-
-                            Ok(())
-                        }
-                        _ => {
-                            if let Some(sender) = sender_option {
-                                let _ = sender.send(LoadingRevisions::Loading);
-                            }
-                            let mut revisions: Vec<DriveRevision> =
-                                match DriveService::list_revisions(&id, &access_token).await {
-                                    Ok(r) => r,
-                                    Err(e) => {
-                                        return Err((
-                                            e,
-                                            Box::new(UnixSocketCommand::GetFileRevisions {
-                                                path,
-                                                force_refresh,
-                                                sender: None,
-                                            }),
-                                        ));
-                                    }
-                                };
-
-                            revisions.sort_by_key(|r| r.modified_time);
-                            revisions.reverse();
-                            cache.insert(id, revisions);
-
-                            Ok(())
-                        }
-                    },
-                }
-            },
-            |result| match result {
+            async move { get_revisions_future.await },
+            move |result| match result {
                 Ok(_) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
                     command: None,
                     error: None,
                 }),
-                Err((err, cmd)) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
-                    command: Some(cmd),
+                Err(err) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
+                    command: Some(Box::new(UnixSocketCommand::GetFileRevisions {
+                        path: path_for_retry,
+                        force_refresh,
+                        sender: None,
+                    })),
                     error: Some(err),
                 }),
             },

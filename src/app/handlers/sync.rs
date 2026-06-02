@@ -235,6 +235,14 @@ impl ArchiveClient {
                 }
                 Task::none()
             }
+            (
+                UserState::OrgSynced { .. },
+                Screen::OrgSync(screen),
+                SyncMessage::AllRevisionsLoaded(revisions),
+            ) => {
+                screen.set_revisions(revisions);
+                Task::none()
+            }
             _ => Task::none(),
         }
     }

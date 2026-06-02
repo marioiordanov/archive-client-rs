@@ -371,6 +371,16 @@ impl ArchiveClient {
                     screens::org_sync::Message::FolderSelected(None),
                 )),
             ) => Task::none(),
+            (
+                _,
+                Screen::OrgSync(screen),
+                Message::Screen(ScreenMessage::OrgSync(
+                    msg @ screens::org_sync::Message::DismissRevisions,
+                )),
+            ) => {
+                screen.update(msg);
+                Task::none()
+            }
             _ => Task::none(),
         }
     }

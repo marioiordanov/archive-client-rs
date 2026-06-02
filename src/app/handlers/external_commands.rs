@@ -7,12 +7,12 @@ use crate::{
     services::drive::DriveRevision,
 };
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct FileWithRevision {
     #[serde(rename = "fileId")]
-    file_id: String,
+    pub(crate) file_id: String,
     #[serde(flatten)]
-    revision: DriveRevision,
+    pub(crate) revision: DriveRevision,
 }
 
 impl FileWithRevision {
@@ -46,6 +46,35 @@ impl ArchiveClient {
                 user_data.access_token.clone(),
                 revisions_cache.clone(),
             ),
+            (
+                UserState::OrgSynced {
+                    user_data,
+                    resolver,
+                    root_folder_id,
+                    revisions_cache,
+                    ..
+                },
+                UnixSocketCommand::ShowAllRevisions { path },
+            ) => {
+                let revisions_task = ArchiveClient::show_all_revisions_task(
+                    path,
+                    root_folder_id.clone(),
+                    resolver.clone(),
+                    user_data.access_token.clone(),
+                    revisions_cache.clone(),
+                );
+                let restore_task = iced::window::latest().then(|maybe_id| {
+                    maybe_id
+                        .map(|id| {
+                            Task::batch([
+                                iced::window::minimize::<Message>(id, false),
+                                iced::window::gain_focus::<Message>(id),
+                            ])
+                        })
+                        .unwrap_or(Task::none())
+                });
+                Task::batch([restore_task, revisions_task])
+            }
             (
                 UserState::OrgSynced {
                     user_data,

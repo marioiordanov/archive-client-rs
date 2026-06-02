@@ -189,6 +189,8 @@ impl ArchiveClient {
                     user_data.access_token.clone(),
                     sender,
                 ),
+                UnixSocketCommand::ShowAllRevisions { path } => Self::show_all_revisions_task(path, root_folder_id.clone(), resolver.clone(), user_data.access_token.clone(),
+                    revisions_cache.clone()),
                 _ => Task::none(),
             },
             (user_state, intent) => {
