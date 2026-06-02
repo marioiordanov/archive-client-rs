@@ -1,6 +1,6 @@
 use std::{path::PathBuf, task::Poll};
 
-use iced::{Task, futures::{ poll}};
+use iced::{Task, futures::{ TryFutureExt, poll}};
 
 use crate::{
     ArchiveClient,
@@ -262,78 +262,40 @@ impl ArchiveClient {
         access_token: String,
         cache: Cache,
     ) -> Result<Vec<FileWithRevision>, CommonServiceError> {
-        let id_result_future =
-            resolver.resolve_path(path.clone(), root_folder_id, access_token.clone());
-
-        // TODO: use this syntax
-        // let c = resolver.resolve_path(path.clone(), root_folder_id, access_token.clone())
-        // .map_err(|e| match e {
-        //             SyncError::Common(c) => c,
-        //             o => CommonServiceError::Unknown(o.to_string()),
-        //         }).and_then(|id| async move {Self::fetch_file_revisions(id, force_refresh, access_token, cache).await});
-
-        tokio::pin!(id_result_future);
-
-        match poll!(&mut id_result_future) {
-            Poll::Pending => {
-                if let Some(sender) = sender_option {
-                    let _ = sender.send(LoadingRevisions::Loading);
-                }
-                let id = id_result_future.await.map_err(|e| match e {
+        let combined_future = resolver.resolve_path(path.clone(), root_folder_id, access_token.clone())
+            .map_err(|e| match e {
                     SyncError::Common(c) => c,
                     o => CommonServiceError::Unknown(o.to_string()),
-                })?;
+                }).and_then(|id| async move {Self::fetch_and_cache_file_revisions(id, force_refresh, access_token, cache).await});
 
-                Self::fetch_and_cache_file_revisions(id, force_refresh, access_token, cache).await
-            }
-            Poll::Ready(Err(e)) => {
+        tokio::pin!(combined_future);
+
+        match poll!(&mut combined_future) {
+            Poll::Ready(Ok(revisions)) => {
                 if let Some(sender) = sender_option {
-                    if let SyncError::Common(CommonServiceError::TokenExpired(..)) = e {
+                    let _ = sender.send(LoadingRevisions::Loaded(revisions.clone()));
+                }
+
+                Ok(revisions)
+            },
+            Poll::Ready(Err(err)) => {
+                if let Some(sender) = sender_option {
+                    if let CommonServiceError::TokenExpired(..) = &err {
                         let _ = sender.send(LoadingRevisions::Loading);
-                    } else {
+                    }else {
                         let _ = sender.send(LoadingRevisions::Error);
                     }
                 }
 
-                let common_error = match e {
-                    SyncError::Common(c) => c,
-                    o => CommonServiceError::Unknown(o.to_string()),
-                };
-
-                Err(common_error)
+                Err(err)
             }
-            Poll::Ready(Ok(id)) => {
-                let revisions_result_future =
-                    Self::fetch_and_cache_file_revisions(id, force_refresh, access_token, cache);
-                tokio::pin!(revisions_result_future);
-
-                match poll!(&mut revisions_result_future) {
-                    Poll::Ready(Ok(revisions)) => {
-                        if let Some(sender) = sender_option {
-                            let _ = sender.send(LoadingRevisions::Loaded(revisions.clone()));
-                        }
-
-                        Ok(revisions)
-                    }
-                    Poll::Ready(Err(e)) => {
-                        if let Some(sender) = sender_option {
-                            if let CommonServiceError::TokenExpired(..) = e {
-                                let _ = sender.send(LoadingRevisions::Loading);
-                            } else {
-                                let _ = sender.send(LoadingRevisions::Error);
-                            }
-                        }
-
-                        Err(e)
-                    }
-                    Poll::Pending => {
-                        if let Some(sender) = sender_option {
-                            let _ = sender.send(LoadingRevisions::Loading);
-                        }
-                        revisions_result_future.await
-                    }
+            Poll::Pending => {
+                if let Some(sender) = sender_option {
+                    let _ = sender.send(LoadingRevisions::Loading);
                 }
-            }
+
+                combined_future.await
+            },
         }
     }
 
@@ -357,7 +319,7 @@ impl ArchiveClient {
             cache,
         );
         Task::perform(
-            async move { get_revisions_future.await },
+            get_revisions_future,
             move |result| match result {
                 Ok(_) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
                     command: None,
