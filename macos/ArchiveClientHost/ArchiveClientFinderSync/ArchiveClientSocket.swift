@@ -21,12 +21,13 @@ class ArchiveSocketClient {
     private let host = "127.0.0.1"
     private let port = 8787
 
-    func getRevisions(for path: String, timeout: TimeInterval = 0.3) -> RevisionsResult {
+    func getRevisions(for path: String, force_refresh: Bool, timeout: TimeInterval = 0.1) -> RevisionsResult {
         let semaphore = DispatchSemaphore(value: 0)
         var result: RevisionsResult = .loading
 
         DispatchQueue.global().async {
-            guard let data = self.sendReceive("revisions@@\(path)") else {
+            let cmd = force_refresh ? "refresh@@\(path)" : "revisions@@\(path)"
+            guard let data = self.sendReceive(cmd) else {
                 result = .error
                 semaphore.signal()
                 return
@@ -54,6 +55,12 @@ class ArchiveSocketClient {
                 return
             }
             completion(String(data: data, encoding: .utf8))
+        }
+    }
+    
+    func showAllRevisions(path: String) {
+        DispatchQueue.global().async {
+            let _ = self.sendReceive("all@@\(path)")
         }
     }
 

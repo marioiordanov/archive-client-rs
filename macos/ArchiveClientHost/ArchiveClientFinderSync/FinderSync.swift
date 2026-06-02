@@ -9,8 +9,11 @@ import Cocoa
 import FinderSync
 
 class FinderSync: FIFinderSync {
-
+    
+    let SHOW_ALL_SUBMENU_THRESHOLD: Int = 3
+    let SHOW_ALL_SUBMENU_NEW_WINDOW_THRESHOLD: Int = 5
     var myFolderURL = URL(fileURLWithPath: "/Users/mario/kibrit-data")
+    let cache = RevisionCache.shared
 
     // TODO: load myFolderUrl from some config file or ask ArchiveClientRs
     override init() {
@@ -33,6 +36,7 @@ class FinderSync: FIFinderSync {
         }
 
         guard !fileURL.pathComponents.contains(".archived") else { return nil }
+        if fileURL.hasDirectoryPath { return nil }
 
         print(selected)
 
@@ -40,7 +44,7 @@ class FinderSync: FIFinderSync {
         let submenu = NSMenu(title: "Versions")
 
         let client = ArchiveSocketClient()
-        switch client.getRevisions(for: fileURL.path) {
+        switch client.getRevisions(for: fileURL.path, force_refresh: false) {
         case .loading:
             let loadingItem = submenu.addItem(withTitle: "Loading...", action: nil, keyEquivalent: "")
             loadingItem.isEnabled = false
@@ -48,40 +52,52 @@ class FinderSync: FIFinderSync {
             return nil
         case .loaded(let revisions):
             // dropping first, because this is the current version
-            let archived = Array(revisions.reversed().dropFirst())
+            let archived = Array(revisions.dropFirst())
+            
             if archived.isEmpty {
                 return nil
             }
+            
+            cache.set(path: fileURL.path, revisions: archived)
+            guard let tagged = cache.get(path: fileURL.path) else { return nil }
 
-            for rev in archived.prefix(3) {
+            for (tag, rev) in tagged.prefix(SHOW_ALL_SUBMENU_THRESHOLD) {
                 let item = NSMenuItem(
                     title: rev.displayTitle,
                     action: #selector(openRevision(_:)),
                     keyEquivalent: ""
                 )
                 item.target = self
-                item.representedObject = rev
+                item.tag = tag
                 submenu.addItem(item)
             }
+            
+            let separator = NSMenuItem(title: "------------------", action: nil, keyEquivalent: "")
+            separator.isEnabled = false
+            let showAllItem = NSMenuItem(title: "Show All Revisions", action: #selector(showAllRevisions(_:)), keyEquivalent: "")
+            let refreshItem = NSMenuItem(title: "Refresh Revisions", action: #selector(refreshRevisions(_:)), keyEquivalent: "")
 
-            let showAllItem = NSMenuItem(title: "Show All", action: nil, keyEquivalent: "")
-
-            if archived.count > 10 {
+            if tagged.count > SHOW_ALL_SUBMENU_NEW_WINDOW_THRESHOLD {
+                submenu.addItem(separator)
+                submenu.addItem(refreshItem)
                 submenu.addItem(showAllItem)
-            } else if archived.count > 3 {
+            } else if tagged.count > SHOW_ALL_SUBMENU_THRESHOLD {
                 let showAllSubmenu = NSMenu(title: "Show All")
-                for rev in archived.dropFirst(3) {
+                for (tag, rev) in tagged.dropFirst(SHOW_ALL_SUBMENU_THRESHOLD) {
                     let item = NSMenuItem(
                         title: rev.displayTitle,
                         action: #selector(openRevision(_:)),
                         keyEquivalent: ""
                     )
                     item.target = self
-                    item.representedObject = rev
+                    item.tag = tag
                     showAllSubmenu.addItem(item)
                 }
                 showAllItem.submenu = showAllSubmenu
+                
                 submenu.addItem(showAllItem)
+                submenu.addItem(separator)
+                submenu.addItem(refreshItem)
             }
         }
 
@@ -92,8 +108,61 @@ class FinderSync: FIFinderSync {
     }
 
     @objc func openRevision(_ sender: NSMenuItem) {
-        guard let rev = sender.representedObject as? FileWithRevision else { return }
+        guard let path = FIFinderSyncController.default().selectedItemURLs()?.first?.path else { return }
+        guard let file_with_revision = self.cache.getRevision(tag: sender.tag, path: path) else { return }
         let client = ArchiveSocketClient()
-        client.downloadFile(file_with_revision: rev) { _ in }
+        client.downloadFile(file_with_revision: file_with_revision) { _ in }
+    }
+    
+    @objc func refreshRevisions(_ sender: NSMenuItem) {
+        guard let path = FIFinderSyncController.default().selectedItemURLs()?.first?.path else { return }
+        let client = ArchiveSocketClient()
+        let _ = client.getRevisions(for: path, force_refresh: true)
+    }
+    
+    @objc func showAllRevisions(_ sender: NSMenuItem) {
+        guard let path = FIFinderSyncController.default().selectedItemURLs()?.first?.path else { return }
+        let client = ArchiveSocketClient()
+        client.showAllRevisions(path: path)
+    }
+}
+
+
+final class RevisionCache {
+    static let shared = RevisionCache()
+
+    private struct Entry {
+        let revisions: [(tag: Int, revision: FileWithRevision)]
+    }
+
+    private var tagCounter = 0
+    private var store: [String: Entry] = [:]
+    private let lock = NSLock()
+
+    func get(path: String) -> [(tag: Int, revision:FileWithRevision)]? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let entry = store[path] else { return nil }
+
+        return entry.revisions
+    }
+
+    func set(path: String, revisions: [FileWithRevision]) {
+        lock.lock()
+        defer { lock.unlock() }
+        let tagged = revisions.map { rev in
+            defer { tagCounter += 1 }
+            return (tag: tagCounter, revision: rev)
+        }
+
+        store[path] = Entry(revisions: tagged)
+    }
+
+    func getRevision(tag: Int, path: String) -> FileWithRevision? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = store[path] else { return nil }
+        return entry.revisions.first(where: { $0.tag == tag })?.revision
     }
 }
