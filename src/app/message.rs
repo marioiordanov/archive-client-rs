@@ -40,17 +40,10 @@ pub enum UnixSocketCommand {
     ShowAllRevisions {
         path: PathBuf,
     },
-    // TODO: use DownloadFileAtPath
-    DownloadRevision {
-        file_id: String,
-        revision_id: String,
-        modified_time: String,
-    },
     DownloadFileAtPath {
         file_id: String,
         revision_id: String,
         modified_time: String,
-        sender: Box<tokio::sync::oneshot::Sender<String>>,
     },
     UnixCommandCompleted {
         command: Option<Box<UnixSocketCommand>>,

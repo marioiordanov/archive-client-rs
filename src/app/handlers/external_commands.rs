@@ -82,35 +82,10 @@ impl ArchiveClient {
                     root_dir,
                     ..
                 },
-                UnixSocketCommand::DownloadRevision {
-                    file_id,
-                    revision_id,
-                    modified_time,
-                },
-            ) => {
-                let (tx, _rx) = tokio::sync::oneshot::channel();
-                ArchiveClient::download_file_at_path_task(
-                    file_id,
-                    revision_id,
-                    modified_time,
-                    resolver.clone(),
-                    root_dir.clone(),
-                    user_data.access_token.clone(),
-                    Box::new(tx),
-                )
-            }
-            (
-                UserState::OrgSynced {
-                    user_data,
-                    resolver,
-                    root_dir,
-                    ..
-                },
                 UnixSocketCommand::DownloadFileAtPath {
                     file_id,
                     revision_id,
                     modified_time,
-                    sender,
                 },
             ) => ArchiveClient::download_file_at_path_task(
                 file_id,
@@ -119,7 +94,6 @@ impl ArchiveClient {
                 resolver.clone(),
                 root_dir.clone(),
                 user_data.access_token.clone(),
-                sender,
             ),
             (
                 UserState::OrgSynced { .. },

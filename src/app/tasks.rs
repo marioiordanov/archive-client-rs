@@ -375,47 +375,26 @@ impl ArchiveClient {
         )
     }
 
-    pub fn download_file_at_path_task(
-        file_id: String,
+    async fn download_file(file_id: String,
         revision_id: String,
         modified_time: String,
         resolver: Resolver,
         root_dir: PathBuf,
-        access_token: String,
-        sender: Box<tokio::sync::oneshot::Sender<String>>,
-    ) -> Task<Message> {
-        Task::perform(
-            async move {
-                if let Some(file_name) = resolver.get_object_name(&file_id).await {
-                    let file_contents = match DriveService::download_revision(
+        access_token: String) -> Result<(), CommonServiceError>{
+            if let Some(file_name) = resolver.get_object_name(&file_id).await {
+                let file_contents = DriveService::download_revision(
                         &file_id,
                         &revision_id,
                         &access_token,
-                    )
-                    .await
-                    {
-                        Ok(c) => c,
-                        Err(e) => {
-                            println!("err downloading revision");
-                            return Err((
-                                e,
-                                Box::new(UnixSocketCommand::DownloadFileAtPath {
-                                    file_id,
-                                    revision_id,
-                                    modified_time,
-                                    sender,
-                                }),
-                            ));
-                        }
-                    };
+                    ).await?;
 
-                    let modified_time_for_path = if cfg!(windows) {
+                let modified_time_for_path = if cfg!(windows) {
                         modified_time.replace(':', "-")
                     } else {
                         modified_time.clone()
                     };
 
-                    let file_name = if let Some(extension_idx) = file_name.rfind('.') {
+                let file_name = if let Some(extension_idx) = file_name.rfind('.') {
                         format!(
                             "{} {}{}",
                             file_name[..extension_idx].to_string(),
@@ -426,46 +405,49 @@ impl ArchiveClient {
                         format!("{file_name} {modified_time_for_path}")
                     };
 
-                    let parent = root_dir.join(".archived");
-                    if !parent.exists() {
-                        let _ = tokio::fs::create_dir(&parent).await;
-                    }
+                let parent = root_dir.join(".archived");
+                if !parent.exists() {
+                    let _ = tokio::fs::create_dir(&parent).await;
+                }
 
-                    let file_path = parent.join(&file_name);
-                    if let Err(e) = tokio::fs::write(&file_path, file_contents).await {
-                        return Err((
-                            CommonServiceError::Unknown(e.to_string()),
-                            Box::new(UnixSocketCommand::DownloadFileAtPath {
-                                file_id,
-                                revision_id,
-                                modified_time,
-                                sender,
-                            }),
-                        ));
-                    }
+                let file_path = parent.join(&file_name);
 
-                    #[cfg(windows)]
-                    {
-                        use std::os::windows::process::CommandExt;
-                        let _ = std::process::Command::new("explorer")
-                            .raw_arg(format!("/select,{}", file_path.display()))
-                            .spawn();
-                    }
-                    #[cfg(not(windows))]
+                let _ = tokio::fs::write(&file_path, file_contents).await.map_err(|e|CommonServiceError::Unknown(e.to_string()))?;
+
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    let _ = std::process::Command::new("explorer")
+                        .raw_arg(format!("/select,{}", file_path.display()))
+                        .spawn();
+                }
+                #[cfg(not(windows))]
+                {
                     let _ = std::process::Command::new("open")
                         .args(["-R", &file_path.to_string_lossy()])
                         .spawn();
-                    let _ = sender.send(file_path.to_string_lossy().into_owned());
                 }
-                Ok(())
-            },
-            |result| match result {
+            }
+            Ok(())
+    }
+
+    pub fn download_file_at_path_task(
+        file_id: String,
+        revision_id: String,
+        modified_time: String,
+        resolver: Resolver,
+        root_dir: PathBuf,
+        access_token: String
+    ) -> Task<Message> {
+        Task::perform(
+            Self::download_file(file_id.clone(), revision_id.clone(), modified_time.clone(), resolver, root_dir, access_token),
+            move |result| match result {
                 Ok(_) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
                     command: None,
                     error: None,
                 }),
-                Err((err, cmd)) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
-                    command: Some(cmd),
+                Err(err) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
+                    command: Some(Box::new(UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time })),
                     error: Some(err),
                 }),
             },

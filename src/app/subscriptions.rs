@@ -91,23 +91,13 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                     let revision_id = msg_parts[2];
                                     let modified_time = msg_parts[3];
 
-                                    let (tx, rx) = tokio::sync::oneshot::channel();
                                     let cmd = UnixSocketCommand::DownloadFileAtPath {
                                         file_id: file_id.into(),
                                         revision_id: revision_id.into(),
-                                        modified_time: modified_time.into(),
-                                        sender: Box::new(tx),
+                                        modified_time: modified_time.into()
                                     };
 
                                     let _ = output.send(Message::UnixSocket(cmd)).await;
-
-                                    if let Ok(path) = rx.await {
-                                        let _ = tokio::io::AsyncWriteExt::write(
-                                            &mut stream,
-                                            path.as_bytes(),
-                                        )
-                                        .await;
-                                    }
                                 }
                                 other => {
                                     println!("Unhandled case {other:?}");

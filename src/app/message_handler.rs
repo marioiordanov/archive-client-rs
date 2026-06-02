@@ -392,7 +392,7 @@ impl ArchiveClient {
                     },
                 )),
             ) => self.handle_unix_socket_commands(
-                crate::app::message::UnixSocketCommand::DownloadRevision {
+                crate::app::message::UnixSocketCommand::DownloadFileAtPath{
                     file_id,
                     revision_id,
                     modified_time,
