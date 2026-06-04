@@ -8,17 +8,11 @@
 import Cocoa
 import FinderSync
 
-enum ArchiveClientState {
-    case folderMapped
-    case notMapped
-}
-
 class FinderSync: FIFinderSync {
 
     let SHOW_ALL_SUBMENU_THRESHOLD: Int = 3
-    let SHOW_ALL_SUBMENU_NEW_WINDOW_THRESHOLD: Int = 5
+    let SHOW_ALL_SUBMENU_NEW_WINDOW_THRESHOLD: Int = 10
     let cache = RevisionCache.shared
-    var state = ArchiveClientState.notMapped
 
     // TODO: load myFolderUrl from some config file or ask ArchiveClientRs
     override init() {
@@ -30,7 +24,6 @@ class FinderSync: FIFinderSync {
             DispatchQueue.main.async {
                 switch result {
                 case .folder(let folder) where !folder.isEmpty:
-                    self.state = ArchiveClientState.folderMapped
                     FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: folder)]
                 default:
                     var token: Int32 = 0
@@ -40,20 +33,14 @@ class FinderSync: FIFinderSync {
                         let client = ArchiveSocketClient()
                         client.getMappedFolder { result in
                             DispatchQueue.main.async {
-                                switch result {
-                                case .folder(let folder) where !folder.isEmpty:
-                                    self.state = .folderMapped
+                                if case .folder(let folder) = result {
                                     FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: folder)]
                                     print("notification observer cancelled")
                                     notify_cancel(token)
-                                default:
-                                    self.state = .notMapped
                                 }
                             }
                         }
                     }
-                    
-                    
                 }
             }
         }
