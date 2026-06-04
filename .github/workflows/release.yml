@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS universal
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-cargo-release-
+
+      - name: Build x86_64
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Build aarch64
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Create universal binary
+        run: |
+          lipo -create \
+            target/x86_64-apple-darwin/release/archive-client-rs \
+            target/aarch64-apple-darwin/release/archive-client-rs \
+            -output archive-client-rs
+          tar -czf archive-client-rs-macos-universal.tar.gz archive-client-rs
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: archive-client-rs-macos-universal.tar.gz
+
+  build-windows:
+    name: Build Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-cargo-release-
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package
+        run: Compress-Archive -Path target\release\archive-client-rs.exe -DestinationPath archive-client-rs-windows-x86_64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: archive-client-rs-windows-x86_64.zip
+
+  release:
+    name: Create GitHub release
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            macos-universal/archive-client-rs-macos-universal.tar.gz
+            windows-x86_64/archive-client-rs-windows-x86_64.zip
+          generate_release_notes: true
