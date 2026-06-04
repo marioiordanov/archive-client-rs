@@ -8,21 +8,57 @@
 import Cocoa
 import FinderSync
 
+enum ArchiveClientState {
+    case folderMapped
+    case notMapped
+}
+
 class FinderSync: FIFinderSync {
-    
+
     let SHOW_ALL_SUBMENU_THRESHOLD: Int = 3
     let SHOW_ALL_SUBMENU_NEW_WINDOW_THRESHOLD: Int = 5
-    var myFolderURL = URL(fileURLWithPath: "/Users/mario/kibrit-data")
     let cache = RevisionCache.shared
+    var state = ArchiveClientState.notMapped
 
     // TODO: load myFolderUrl from some config file or ask ArchiveClientRs
     override init() {
         super.init()
-
+        
         print("FinderSync() launched from %@", Bundle.main.bundlePath as NSString)
+        let client = ArchiveSocketClient()
+        client.getMappedFolder { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .folder(let folder) where !folder.isEmpty:
+                    self.state = ArchiveClientState.folderMapped
+                    FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: folder)]
+                default:
+                    var token: Int32 = 0
+                    print("subscribe to notification")
+                    notify_register_dispatch("com.archiveClientRs.mappedFolderChanged", &token, .main) { _ in
+                        print("notification received")
+                        let client = ArchiveSocketClient()
+                        client.getMappedFolder { result in
+                            DispatchQueue.main.async {
+                                switch result {
+                                case .folder(let folder) where !folder.isEmpty:
+                                    self.state = .folderMapped
+                                    FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: folder)]
+                                    print("notification observer cancelled")
+                                    notify_cancel(token)
+                                default:
+                                    self.state = .notMapped
+                                }
+                            }
+                        }
+                    }
+                    
+                    
+                }
+            }
+        }
 
-        // Set up the directory we are syncing.
-        FIFinderSyncController.default().directoryURLs = [self.myFolderURL]
+        
     }
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
@@ -53,11 +89,11 @@ class FinderSync: FIFinderSync {
         case .loaded(let revisions):
             // dropping first, because this is the current version
             let archived = Array(revisions.dropFirst())
-            
+
             if archived.isEmpty {
                 return nil
             }
-            
+
             cache.set(path: fileURL.path, revisions: archived)
             guard let tagged = cache.get(path: fileURL.path) else { return nil }
 
@@ -71,7 +107,7 @@ class FinderSync: FIFinderSync {
                 item.tag = tag
                 submenu.addItem(item)
             }
-            
+
             let separator = NSMenuItem(title: "------------------", action: nil, keyEquivalent: "")
             separator.isEnabled = false
             let showAllItem = NSMenuItem(title: "Show All Revisions", action: #selector(showAllRevisions(_:)), keyEquivalent: "")
@@ -94,7 +130,7 @@ class FinderSync: FIFinderSync {
                     showAllSubmenu.addItem(item)
                 }
                 showAllItem.submenu = showAllSubmenu
-                
+
                 submenu.addItem(showAllItem)
                 submenu.addItem(separator)
                 submenu.addItem(refreshItem)
@@ -113,13 +149,13 @@ class FinderSync: FIFinderSync {
         let client = ArchiveSocketClient()
         client.downloadFile(file_with_revision: file_with_revision) { _ in }
     }
-    
+
     @objc func refreshRevisions(_ sender: NSMenuItem) {
         guard let path = FIFinderSyncController.default().selectedItemURLs()?.first?.path else { return }
         let client = ArchiveSocketClient()
         let _ = client.getRevisions(for: path, force_refresh: true)
     }
-    
+
     @objc func showAllRevisions(_ sender: NSMenuItem) {
         guard let path = FIFinderSyncController.default().selectedItemURLs()?.first?.path else { return }
         let client = ArchiveSocketClient()

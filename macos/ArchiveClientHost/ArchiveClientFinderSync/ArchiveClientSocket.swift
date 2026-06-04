@@ -17,9 +17,25 @@ enum RevisionsResult {
     case error
 }
 
+enum MappedFolderResult {
+    case folder(String)
+    case error
+}
+
 class ArchiveSocketClient {
     private let host = "127.0.0.1"
-    private let port = 8787
+    private let port = 38787
+
+    func getMappedFolder(completion: @escaping (MappedFolderResult) -> Void) {
+        DispatchQueue.global().async {
+            guard let data = self.sendReceive("watching"),
+                  let folder = String(data: data, encoding: .utf8) else {
+                completion(MappedFolderResult.error)
+                return
+            }
+            completion(MappedFolderResult.folder(folder))
+        }
+    }
 
     func getRevisions(for path: String, force_refresh: Bool, timeout: TimeInterval = 0.1) -> RevisionsResult {
         let semaphore = DispatchSemaphore(value: 0)
@@ -47,7 +63,7 @@ class ArchiveSocketClient {
         _ = semaphore.wait(timeout: .now() + timeout)
         return result
     }
-    
+
     func downloadFile(file_with_revision: FileWithRevision, completion: @escaping (String?) -> Void) {
         DispatchQueue.global().async {
             guard let data = self.sendReceive("download@@\(file_with_revision.fileId)@@\(file_with_revision.id)@@\(file_with_revision.modifiedTime)") else {
@@ -57,7 +73,7 @@ class ArchiveSocketClient {
             completion(String(data: data, encoding: .utf8))
         }
     }
-    
+
     func showAllRevisions(path: String) {
         DispatchQueue.global().async {
             let _ = self.sendReceive("all@@\(path)")
