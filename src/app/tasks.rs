@@ -1,6 +1,9 @@
 use std::{path::PathBuf, task::Poll};
 
-use iced::{Task, futures::{ TryFutureExt, poll}};
+use iced::{
+    Task,
+    futures::{TryFutureExt, poll},
+};
 
 use crate::{
     ArchiveClient,
@@ -8,15 +11,12 @@ use crate::{
         self,
         handlers::external_commands::FileWithRevision,
         message::{
-            CommonServiceError, LoadingRevisions, Message, OrgMessage, SyncError,
-            SyncMessage, UnixSocketCommand,
+            CommonServiceError, LoadingRevisions, Message, OrgMessage, SyncError, SyncMessage,
+            UnixSocketCommand,
         },
     },
     services::{
-        auth::AuthService,
-        drive::{ DriveService},
-        org::OrgService,
-        resolver::Resolver,
+        auth::AuthService, drive::DriveService, org::OrgService, resolver::Resolver,
         revisions_cache::Cache,
     },
 };
@@ -213,10 +213,17 @@ impl ArchiveClient {
         access_token: String,
         cache: Cache,
     ) -> Task<Message> {
-        let revisions_future = Self::get_file_revisions(path.clone(), true, None, root_folder_id, resolver, access_token, cache);
+        let revisions_future = Self::get_file_revisions(
+            path.clone(),
+            true,
+            None,
+            root_folder_id,
+            resolver,
+            access_token,
+            cache,
+        );
         Task::perform(
-                revisions_future
-            ,
+            revisions_future,
             |result: Result<Vec<FileWithRevision>, CommonServiceError>| match result {
                 Ok(revisions) => Message::Sync(SyncMessage::AllRevisionsLoaded(revisions)),
                 Err(e) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
@@ -262,11 +269,15 @@ impl ArchiveClient {
         access_token: String,
         cache: Cache,
     ) -> Result<Vec<FileWithRevision>, CommonServiceError> {
-        let combined_future = resolver.resolve_path(path.clone(), root_folder_id, access_token.clone())
+        let combined_future = resolver
+            .resolve_path(path.clone(), root_folder_id, access_token.clone())
             .map_err(|e| match e {
-                    SyncError::Common(c) => c,
-                    o => CommonServiceError::Unknown(o.to_string()),
-                }).and_then(|id| async move {Self::fetch_and_cache_file_revisions(id, force_refresh, access_token, cache).await});
+                SyncError::Common(c) => c,
+                o => CommonServiceError::Unknown(o.to_string()),
+            })
+            .and_then(|id| async move {
+                Self::fetch_and_cache_file_revisions(id, force_refresh, access_token, cache).await
+            });
 
         tokio::pin!(combined_future);
 
@@ -277,12 +288,12 @@ impl ArchiveClient {
                 }
 
                 Ok(revisions)
-            },
+            }
             Poll::Ready(Err(err)) => {
                 if let Some(sender) = sender_option {
                     if let CommonServiceError::TokenExpired(..) = &err {
                         let _ = sender.send(LoadingRevisions::Loading);
-                    }else {
+                    } else {
                         let _ = sender.send(LoadingRevisions::Error);
                     }
                 }
@@ -295,7 +306,7 @@ impl ArchiveClient {
                 }
 
                 combined_future.await
-            },
+            }
         }
     }
 
@@ -318,79 +329,77 @@ impl ArchiveClient {
             access_token,
             cache,
         );
-        Task::perform(
-            get_revisions_future,
-            move |result| match result {
-                Ok(_) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
-                    command: None,
-                    error: None,
-                }),
-                Err(err) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
-                    command: Some(Box::new(UnixSocketCommand::GetFileRevisions {
-                        path: path_for_retry,
-                        force_refresh,
-                        sender: None,
-                    })),
-                    error: Some(err),
-                }),
-            },
-        )
+        Task::perform(get_revisions_future, move |result| match result {
+            Ok(_) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
+                command: None,
+                error: None,
+            }),
+            Err(err) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
+                command: Some(Box::new(UnixSocketCommand::GetFileRevisions {
+                    path: path_for_retry,
+                    force_refresh,
+                    sender: None,
+                })),
+                error: Some(err),
+            }),
+        })
     }
 
-    async fn download_file(file_id: String,
+    async fn download_file(
+        file_id: String,
         revision_id: String,
         modified_time: String,
         resolver: Resolver,
         root_dir: PathBuf,
-        access_token: String) -> Result<(), CommonServiceError>{
-            if let Some(file_name) = resolver.get_object_name(&file_id).await {
-                let file_contents = DriveService::download_revision(
-                        &file_id,
-                        &revision_id,
-                        &access_token,
-                    ).await?;
+        access_token: String,
+    ) -> Result<(), CommonServiceError> {
+        if let Some(file_name) = resolver.get_object_name(&file_id).await {
+            let file_contents =
+                DriveService::download_revision(&file_id, &revision_id, &access_token).await?;
 
-                let modified_time_for_path = if cfg!(windows) {
-                        modified_time.replace(':', "-")
-                    } else {
-                        modified_time.clone()
-                    };
+            let modified_time_for_path = if cfg!(windows) {
+                modified_time.replace(':', "-")
+            } else {
+                modified_time.clone()
+            };
 
-                let file_name = if let Some(extension_idx) = file_name.rfind('.') {
-                        format!(
-                            "{} {}{}",
-                            file_name[..extension_idx].to_string(),
-                            modified_time_for_path,
-                            file_name[extension_idx..].to_string()
-                        )
-                    } else {
-                        format!("{file_name} {modified_time_for_path}")
-                    };
+            let file_name = if let Some(extension_idx) = file_name.rfind('.') {
+                format!(
+                    "{} {}{}",
+                    file_name[..extension_idx].to_string(),
+                    modified_time_for_path,
+                    file_name[extension_idx..].to_string()
+                )
+            } else {
+                format!("{file_name} {modified_time_for_path}")
+            };
 
-                let parent = root_dir.join(".archived");
-                if !parent.exists() {
-                    let _ = tokio::fs::create_dir(&parent).await;
-                }
-
-                let file_path = parent.join(&file_name);
-
-                let _ = tokio::fs::write(&file_path, file_contents).await.map_err(|e|CommonServiceError::Unknown(e.to_string()))?;
-
-                #[cfg(windows)]
-                {
-                    use std::os::windows::process::CommandExt;
-                    let _ = std::process::Command::new("explorer")
-                        .raw_arg(format!("/select,{}", file_path.display()))
-                        .spawn();
-                }
-                #[cfg(not(windows))]
-                {
-                    let _ = std::process::Command::new("open")
-                        .args(["-R", &file_path.to_string_lossy()])
-                        .spawn();
-                }
+            let parent = root_dir.join(".archived");
+            if !parent.exists() {
+                let _ = tokio::fs::create_dir(&parent).await;
             }
-            Ok(())
+
+            let file_path = parent.join(&file_name);
+
+            let _ = tokio::fs::write(&file_path, file_contents)
+                .await
+                .map_err(|e| CommonServiceError::Unknown(e.to_string()))?;
+
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                let _ = std::process::Command::new("explorer")
+                    .raw_arg(format!("/select,{}", file_path.display()))
+                    .spawn();
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = std::process::Command::new("open")
+                    .args(["-R", &file_path.to_string_lossy()])
+                    .spawn();
+            }
+        }
+        Ok(())
     }
 
     pub fn download_file_at_path_task(
@@ -399,17 +408,28 @@ impl ArchiveClient {
         modified_time: String,
         resolver: Resolver,
         root_dir: PathBuf,
-        access_token: String
+        access_token: String,
     ) -> Task<Message> {
         Task::perform(
-            Self::download_file(file_id.clone(), revision_id.clone(), modified_time.clone(), resolver, root_dir, access_token),
+            Self::download_file(
+                file_id.clone(),
+                revision_id.clone(),
+                modified_time.clone(),
+                resolver,
+                root_dir,
+                access_token,
+            ),
             move |result| match result {
                 Ok(_) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
                     command: None,
                     error: None,
                 }),
                 Err(err) => Message::UnixSocket(UnixSocketCommand::UnixCommandCompleted {
-                    command: Some(Box::new(UnixSocketCommand::DownloadFileAtPath { file_id, revision_id, modified_time })),
+                    command: Some(Box::new(UnixSocketCommand::DownloadFileAtPath {
+                        file_id,
+                        revision_id,
+                        modified_time,
+                    })),
                     error: Some(err),
                 }),
             },

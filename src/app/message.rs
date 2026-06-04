@@ -7,7 +7,7 @@ use crate::{
     screens,
     services::{
         auth::{AccessTokenResponse, RefreshTokenResponse},
-        drive::{DriveFile},
+        drive::DriveFile,
         file_index::FileIndex,
         org::{DashboardRowData, RootFolderEntry},
     },
@@ -102,6 +102,8 @@ pub enum SyncMessage {
     },
     /// Debounced + deduplicated actions emitted by the filesystem watcher subscription.
     ActionsReady(Vec<SyncAction>),
+
+    TcpServerStarted,
 
     BatchCompleted,
 

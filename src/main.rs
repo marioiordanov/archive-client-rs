@@ -326,8 +326,8 @@ impl ArchiveClient {
             _ => Subscription::none(),
         };
 
-        let unix = match self.app.user_state {
-            UserState::OrgSynced { .. } => tcp_server_subscription(),
+        let unix = match &self.app.user_state {
+            UserState::OrgSynced { root_dir, .. } => tcp_server_subscription(root_dir.clone()),
             _ => Subscription::none(),
         };
 

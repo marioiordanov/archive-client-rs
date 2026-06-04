@@ -2,8 +2,8 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{button, column, container, mouse_area, row, scrollable, text};
 use iced::{Alignment, Background, Color, Element, Length};
 
-use crate::app::message::{ScreenMessage};
 use crate::app::handlers::external_commands::FileWithRevision;
+use crate::app::message::ScreenMessage;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -21,7 +21,7 @@ pub enum Message {
     },
     RevisionClicked {
         revision_id: String,
-    }
+    },
 }
 
 impl From<Message> for ScreenMessage {
@@ -141,9 +141,12 @@ impl OrgSyncScreen {
                     let revision_id = r.revision.id.clone();
                     let modified_time = r.revision.modified_time.to_string();
                     let is_selected = self.selected_revision.as_deref() == Some(&revision_id);
-                    let label =
-                        text(format!("{}{}", r.revision.modified_time.format("%c"), size_label))
-                            .size(12);
+                    let label = text(format!(
+                        "{}{}",
+                        r.revision.modified_time.format("%c"),
+                        size_label
+                    ))
+                    .size(12);
                     let row = container(
                         mouse_area(label)
                             .on_press(Message::RevisionClicked {

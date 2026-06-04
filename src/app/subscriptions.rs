@@ -13,6 +13,7 @@ const GET_REVISIONS: &str = "revisions";
 const REFRESH_REVISIONS: &str = "refresh";
 const DOWNLOAD_REVISION: &str = "download";
 const SHOW_ALL_REVISIONS: &str = "all";
+const WATCHING_FOLDER: &str = "watching";
 
 const ARCHIVE_WINDOW: Duration = Duration::from_secs(15); // 15 minutes
 const MAX_ARCHIVE_WINDOW: Duration = Duration::from_secs(3600 * 2);
@@ -22,16 +23,20 @@ pub fn fs_watch_subscription(root: PathBuf) -> Subscription<Message> {
     Subscription::run_with(root, fs_watch)
 }
 
-pub fn tcp_server_subscription() -> Subscription<Message> {
+pub fn tcp_server_subscription(root_dir: PathBuf) -> Subscription<Message> {
     println!("unix server start watching");
-    Subscription::run(tcp_subscription)
+    Subscription::run_with(root_dir, tcp_subscription)
 }
 
-pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> {
+#[allow(clippy::ptr_arg)]
+pub fn tcp_subscription(root_dir: &PathBuf) -> iced::futures::stream::BoxStream<'static, Message> {
+    let root_dir = root_dir.clone();
     stream::channel(
         10,
         move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
-            let listener = TcpListener::bind("127.0.0.1:8787").await.unwrap();
+            let listener = TcpListener::bind("127.0.0.1:38787").await.unwrap();
+            let _ = output.send(Message::Sync(SyncMessage::TcpServerStarted)).await;
+
             loop {
                 match listener.accept().await {
                     Ok((mut stream, _)) => {
@@ -44,6 +49,14 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                             let command = msg_parts.first().cloned();
                             println!("{msg}");
                             match command {
+                                Some(WATCHING_FOLDER) => {
+                                    tokio::io::AsyncWriteExt::write(
+                                        &mut stream,
+                                        root_dir.to_string_lossy().to_string().as_bytes(),
+                                    )
+                                    .await
+                                    .unwrap();
+                                }
                                 Some(GET_REVISIONS) | Some(REFRESH_REVISIONS)
                                     if msg_parts.last().is_some() =>
                                 {
@@ -94,7 +107,7 @@ pub fn tcp_subscription() -> iced::futures::stream::BoxStream<'static, Message> 
                                     let cmd = UnixSocketCommand::DownloadFileAtPath {
                                         file_id: file_id.into(),
                                         revision_id: revision_id.into(),
-                                        modified_time: modified_time.into()
+                                        modified_time: modified_time.into(),
                                     };
 
                                     let _ = output.send(Message::UnixSocket(cmd)).await;

@@ -178,7 +178,7 @@ impl ArchiveClient {
                 UnixSocketCommand::DownloadFileAtPath {
                     file_id,
                     revision_id,
-                    modified_time
+                    modified_time,
                 } => Self::download_file_at_path_task(
                     file_id,
                     revision_id,
@@ -187,8 +187,13 @@ impl ArchiveClient {
                     root_dir.clone(),
                     user_data.access_token.clone(),
                 ),
-                UnixSocketCommand::ShowAllRevisions { path } => Self::show_all_revisions_task(path, root_folder_id.clone(), resolver.clone(), user_data.access_token.clone(),
-                    revisions_cache.clone()),
+                UnixSocketCommand::ShowAllRevisions { path } => Self::show_all_revisions_task(
+                    path,
+                    root_folder_id.clone(),
+                    resolver.clone(),
+                    user_data.access_token.clone(),
+                    revisions_cache.clone(),
+                ),
                 _ => Task::none(),
             },
             (user_state, intent) => {

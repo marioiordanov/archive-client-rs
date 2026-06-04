@@ -13,16 +13,17 @@ use crate::{
     },
     screens,
     services::{
-        drive::DriveService,
-        file_index::FileIndex,
-        local_storage::{LocalStorageService, ObjectType},
-        resolver::Resolver,
+        self, drive::DriveService, file_index::FileIndex, local_storage::{LocalStorageService, ObjectType}, resolver::Resolver
     },
 };
 
 impl ArchiveClient {
     pub fn handle_sync_messages(&mut self, message: SyncMessage) -> Task<Message> {
         match (&self.app.user_state, &mut self.screen, message) {
+            (UserState::OrgSynced { .. }, _, SyncMessage::TcpServerStarted) => {
+                services::notify_folder_changed();
+                Task::none()
+            }
             (
                 UserState::OrgJoined { .. },
                 Screen::OrgSync(_),
@@ -41,6 +42,9 @@ impl ArchiveClient {
                     LocalStorageService::update_object::<OrgState, _>(ObjectType::Org, |org| {
                         org.status = crate::app::state::OrgStatus::Ready;
                     });
+
+                    services::notify_folder_changed();
+
                     Task::none()
                 }
                 Err(e) => {
