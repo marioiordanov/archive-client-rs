@@ -14,7 +14,7 @@ pub(crate) mod macos {
 }
 
 #[cfg(windows)]
-mod windows {
+pub(crate) mod windows {
     pub(crate) fn notify_folder_changed() {
         // EMPTY
     }
