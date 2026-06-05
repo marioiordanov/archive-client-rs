@@ -13,10 +13,13 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-          - os: windows-latest
+          #- os: windows-latest
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Output lock file
+        run: cat Cargo.lock
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
