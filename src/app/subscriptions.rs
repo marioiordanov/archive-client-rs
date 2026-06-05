@@ -3,6 +3,7 @@ use std::{path::PathBuf, time::Duration};
 use iced::Subscription;
 use iced::futures::{SinkExt, StreamExt};
 use iced::stream;
+use log::{debug, error, info, warn};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 
@@ -19,12 +20,12 @@ const ARCHIVE_WINDOW: Duration = Duration::from_secs(15); // 15 minutes
 const MAX_ARCHIVE_WINDOW: Duration = Duration::from_secs(3600 * 2);
 
 pub fn fs_watch_subscription(root: PathBuf) -> Subscription<Message> {
-    println!("start watching");
+    debug!("start watching");
     Subscription::run_with(root, fs_watch)
 }
 
 pub fn tcp_server_subscription(root_dir: PathBuf) -> Subscription<Message> {
-    println!("unix server start watching");
+    debug!("unix server start watching");
     Subscription::run_with(root_dir, tcp_subscription)
 }
 
@@ -47,7 +48,7 @@ pub fn tcp_subscription(root_dir: &PathBuf) -> iced::futures::stream::BoxStream<
                             let msg = String::from_utf8(buf).unwrap();
                             let msg_parts: Vec<&str> = msg.split("@@").map(|s| s.trim()).collect();
                             let command = msg_parts.first().cloned();
-                            println!("{msg}");
+                            debug!("{msg}");
                             match command {
                                 Some(WATCHING_FOLDER) => {
                                     tokio::io::AsyncWriteExt::write(
@@ -113,15 +114,15 @@ pub fn tcp_subscription(root_dir: &PathBuf) -> iced::futures::stream::BoxStream<
                                     let _ = output.send(Message::UnixSocket(cmd)).await;
                                 }
                                 other => {
-                                    println!("Unhandled case {other:?}");
+                                    warn!("Unhandled case {other:?}");
                                 }
                             };
                         } else {
-                            println!("not read to end");
+                            warn!("not read to end");
                         }
                     }
                     other => {
-                        println!("{other:?}");
+                        warn!("{other:?}");
                     }
                 }
             }
@@ -155,7 +156,7 @@ fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Mes
             let (mut w, mut events) = match watcher {
                 Ok(value) => value,
                 Err(e) => {
-                    println!("Failed to start watcher: {e}");
+                    log::error!("Failed to start watcher: {e}");
                     return;
                 }
             };
@@ -174,7 +175,7 @@ fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Mes
                                 batch.push(event);
                             },
                             Some(Err(e)) => {
-                                println!("Stream closed due to {e:?}");
+                                error!("Stream closed due to {e:?}");
                                 break;
                             }
                             None => break,
@@ -182,7 +183,7 @@ fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Mes
                     }
                     _ = interval.tick() => {
                         if batch.is_empty() {
-                            println!("batch is empty increase archive window");
+                            info!("batch is empty increase archive window");
                             current_period *= 2;
                             if current_period > MAX_ARCHIVE_WINDOW {
                                 current_period = MAX_ARCHIVE_WINDOW;

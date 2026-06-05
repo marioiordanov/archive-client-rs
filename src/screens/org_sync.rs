@@ -56,7 +56,6 @@ impl OrgSyncScreen {
     }
 
     pub fn update(&mut self, message: Message) {
-        println!("{message:?}");
         match message {
             Message::LocalFolderChanged(value) => {
                 self.local_folder_input = value;
