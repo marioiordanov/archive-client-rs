@@ -24,7 +24,7 @@ tokio = { version = "1.49.0", features = ["io-std", "io-util", "macros", "net"] 
 url = "2.5.8"
 warp = "0.4.2"
 webbrowser = { version = "1.0.6", features = ["hardened", "disable-wsl"] }
-fs_watcher = { git = "https://github.com/marioiordanov/fs_watcher", rev = "a291884"}
+fs_watcher = { git = "https://github.com/marioiordanov/fs_watcher", rev = "db98a18"}
 dashmap = "6.2.1"
 chrono = "0.4.44"
 

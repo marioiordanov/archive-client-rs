@@ -1128,7 +1128,7 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 [[package]]
 name = "fs_watcher"
 version = "0.1.0"
-source = "git+https://github.com/marioiordanov/fs_watcher?rev=a291884#a291884f81f7950ac81bfddbb7bc49a0fe3e5a72"
+source = "git+https://github.com/marioiordanov/fs_watcher?rev=db98a18#db98a18d5c683f010479a143318f2f04067d8d06"
 dependencies = [
  "file-id",
  "notify",
