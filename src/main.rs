@@ -31,8 +31,6 @@ fn main() -> iced::Result {
         .format_timestamp_millis()
         .init();
 
-    dotenvy::dotenv().map_err(|e| iced::Error::WindowCreationFailed(e.into()))?;
-
     iced::application(
         ArchiveClient::boot,
         ArchiveClient::update,

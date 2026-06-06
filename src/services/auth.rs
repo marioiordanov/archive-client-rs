@@ -67,10 +67,10 @@ impl AuthService {
         refresh_token: &str,
     ) -> Result<RefreshTokenResponse, AuthError> {
         HttpService::<()>::new(TOKEN_URL)
-            .form_data("client_id", dotenvy::var("CLIENT_ID").unwrap())
+            .form_data("client_id", env!("CLIENT_ID"))
             .form_data("refresh_token", refresh_token)
             .form_data("grant_type", "refresh_token")
-            .form_data("client_secret", dotenvy::var("CLIENT_SECRET").unwrap())
+            .form_data("client_secret", env!("CLIENT_SECRET"))
             .post::<RefreshTokenResponse, CommonServiceError>()
             .await
             .map_err(|e| e.into())
@@ -91,10 +91,10 @@ impl AuthService {
             if let Some(code) = params.get("code") {
                 return HttpService::<()>::new(TOKEN_URL)
                     .form_data("code", code)
-                    .form_data("client_id", dotenvy::var("CLIENT_ID").unwrap())
+                    .form_data("client_id", env!("CLIENT_ID"))
                     .form_data("redirect_uri", REDIRECT_URI)
                     .form_data("grant_type", "authorization_code")
-                    .form_data("client_secret", dotenvy::var("CLIENT_SECRET").unwrap())
+                    .form_data("client_secret", env!("CLIENT_SECRET"))
                     .post::<AccessTokenResponse, CommonServiceError>()
                     .await
                     .map_err(AuthError::from);
@@ -193,7 +193,7 @@ impl AuthService {
         let mut url = Url::from_str(AUTH_URL).unwrap(); // safe, because it comes from a constant
 
         url.query_pairs_mut()
-            .append_pair("client_id", &dotenvy::var("CLIENT_ID").unwrap())
+            .append_pair("client_id", &env!("CLIENT_ID"))
             .append_pair("redirect_uri", REDIRECT_URI)
             .append_pair("scope", &SCOPES.join(" "))
             .append_pair("access_type", "offline")
