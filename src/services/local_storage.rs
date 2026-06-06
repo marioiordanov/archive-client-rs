@@ -2,7 +2,7 @@ use std::{fs, io::Write, path::PathBuf};
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::constants::LOCAL_FOLDER_BASE;
+use crate::constants::local_folder_base;
 
 pub struct LocalStorageService;
 
@@ -45,7 +45,7 @@ impl LocalStorageService {
     }
 
     fn cache_path(obj_type: ObjectType) -> PathBuf {
-        let mut path = std::path::PathBuf::from(LOCAL_FOLDER_BASE);
+        let mut path = local_folder_base();
         let filename = match obj_type {
             ObjectType::UserProfile => "auth.json",
             ObjectType::Org => "org.json",
