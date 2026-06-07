@@ -1,0 +1,18 @@
+{
+  "version": 4,
+  "configurePresets": [
+    {
+      "name": "main",
+      "displayName": "ArchiveContextMenu Preset",
+      "description": "Preset to use with building",
+      "binaryDir": "${sourceDir}/build"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "main",
+      "configuration": "Release"
+    }
+  ]
+}
