@@ -90,7 +90,7 @@ jobs:
         working-directory: ./windows/ArchiveContextMenu
 
       - name: Package
-        run: Compress-Archive -Path windows\ArchiveContextMenu\build\Release\ArchiveContextMenu.dll -Path target\release\archive-client-rs.exe -DestinationPath archive-client-rs-windows-x86_64.zip
+        run: Compress-Archive -Path windows\ArchiveContextMenu\build\Release\ArchiveContextMenu.dll, target\release\archive-client-rs.exe -DestinationPath archive-client-rs-windows-x86_64.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
