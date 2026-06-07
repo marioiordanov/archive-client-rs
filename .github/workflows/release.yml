@@ -81,17 +81,13 @@ jobs:
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
 
-      - name: Switch to windows directory
-        run: cd ./windows/ArchiveContextMenu
-
       - name: Configure CMake
         run: cmake --preset main
+        working-directory: ./windows/ArchiveContextMenu
 
       - name: Build via CMake
         run: cmake --build --preset release
-
-      - name: Back to checkout directory
-        run: cd ../..
+        working-directory: ./windows/ArchiveContextMenu
 
       - name: Package
         run: Compress-Archive -Path windows\ArchiveContextMenu\build\Release\ArchiveContextMenu.dll -Path target\release\archive-client-rs.exe -DestinationPath archive-client-rs-windows-x86_64.zip

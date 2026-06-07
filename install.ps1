@@ -19,7 +19,7 @@ Remove-Item $zip
 
 Write-Host "Installed to $installDir"
 
-$DllPath = Join-Path -Path &installDir - ChildPath "ArchiveContextMenu.dll"
+$DllPath = Join-Path -Path $installDir -ChildPath "ArchiveContextMenu.dll"
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
@@ -45,5 +45,3 @@ if ($proc.ExitCode -eq 0) {
 } else {
     Write-Error ("regsvr32 failed (exit 0x{0:X8})" -f $proc.ExitCode)
 }
-
-Write-Host $proc
