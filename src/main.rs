@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use iced::{Element, Subscription, Task};
 use lazy_static::lazy_static;
-use log::warn;
+use log::{info, warn};
 
 mod app;
 mod constants;
@@ -292,7 +292,7 @@ impl ArchiveClient {
 
     // update the UI
     fn view(&self) -> Element<'_, Message> {
-        println!("Rendering view for screen {}", self.screen);
+        info!("Rendering view for screen {}", self.screen);
 
         let folder_name = match &self.app.user_state {
             crate::UserState::SignedOut => "",

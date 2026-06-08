@@ -3,7 +3,7 @@ use std::{path::PathBuf, time::Duration};
 use iced::Subscription;
 use iced::futures::{SinkExt, StreamExt};
 use iced::stream;
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 
@@ -20,12 +20,12 @@ const ARCHIVE_WINDOW: Duration = Duration::from_secs(15); // 15 minutes
 const MAX_ARCHIVE_WINDOW: Duration = Duration::from_secs(3600 * 2);
 
 pub fn fs_watch_subscription(root: PathBuf) -> Subscription<Message> {
-    debug!("start watching");
+    info!("start watching {}", root.display());
     Subscription::run_with(root, fs_watch)
 }
 
 pub fn tcp_server_subscription(root_dir: PathBuf) -> Subscription<Message> {
-    debug!("unix server start watching");
+    info!("unix server start watching");
     Subscription::run_with(root_dir, tcp_subscription)
 }
 
@@ -48,7 +48,7 @@ pub fn tcp_subscription(root_dir: &PathBuf) -> iced::futures::stream::BoxStream<
                             let msg = String::from_utf8(buf).unwrap();
                             let msg_parts: Vec<&str> = msg.split("@@").map(|s| s.trim()).collect();
                             let command = msg_parts.first().cloned();
-                            debug!("{msg}");
+                            info!("{msg}");
                             match command {
                                 Some(WATCHING_FOLDER) => {
                                     tokio::io::AsyncWriteExt::write(
@@ -165,11 +165,12 @@ fn fs_watch(dir_root: &PathBuf) -> iced::futures::stream::BoxStream<'static, Mes
             let mut interval = tokio::time::interval(current_period);
             interval.tick().await;
             let mut batch = vec![];
+            let fs_index = FsIndex::scan(&dir_root);
 
             loop {
-                let fs_index = FsIndex::scan(&dir_root);
                 tokio::select! {
                     event = events.next() => {
+                        info!("{event:?}");
                         match event {
                             Some(Ok(event)) => {
                                 batch.push(event);

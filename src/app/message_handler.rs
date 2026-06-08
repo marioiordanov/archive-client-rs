@@ -1,4 +1,5 @@
 use iced::Task;
+use log::info;
 
 use crate::{
     ArchiveClient, UserState,
@@ -322,7 +323,7 @@ impl ArchiveClient {
                     screens::org_sync::Message::FolderSelected(Some(path)),
                 )),
             ) => {
-                println!("folder selected {path}");
+                info!("folder selected {path}");
                 let path_buf = std::path::PathBuf::from(&path);
                 if !path_buf.exists() || !path_buf.is_dir() {
                     return Task::none();
