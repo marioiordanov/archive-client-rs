@@ -49,10 +49,10 @@ jobs:
             target/x86_64-apple-darwin/release/archive-client-rs \
             target/aarch64-apple-darwin/release/archive-client-rs \
             -output archive-client-rs
-          mkdir -p "Archive Client.app/Contents/MacOS"
-          cp archive-client-rs "Archive Client.app/Contents/MacOS/"
-          cp macos/Info.plist "Archive Client.app/Contents/"
-          tar -czf archive-client-rs-macos-universal.tar.gz "Archive Client.app"
+          mkdir -p "ArchiveClient.app/Contents/MacOS"
+          cp archive-client-rs "ArchiveClient.app/Contents/MacOS/"
+          cp macos/Info.plist "ArchiveClient.app/Contents/"
+          tar -czf archive-client-rs-macos-universal.tar.gz "ArchiveClient.app"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

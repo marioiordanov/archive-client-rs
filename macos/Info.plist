@@ -7,9 +7,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.archive.client</string>
     <key>CFBundleName</key>
-    <string>Archive Client</string>
+    <string>ArchiveClient</string>
     <key>CFBundleDisplayName</key>
-    <string>Archive Client</string>
+    <string>ArchiveClient</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>
