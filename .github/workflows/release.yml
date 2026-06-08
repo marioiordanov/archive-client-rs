@@ -42,13 +42,16 @@ jobs:
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
 
-      - name: Create universal binary
+      - name: Create universal binary and app bundle
         run: |
           lipo -create \
             target/x86_64-apple-darwin/release/archive-client-rs \
             target/aarch64-apple-darwin/release/archive-client-rs \
             -output archive-client-rs
-          tar -czf archive-client-rs-macos-universal.tar.gz archive-client-rs
+          mkdir -p "Archive Client.app/Contents/MacOS"
+          cp archive-client-rs "Archive Client.app/Contents/MacOS/"
+          cp macos/Info.plist "Archive Client.app/Contents/"
+          tar -czf archive-client-rs-macos-universal.tar.gz "Archive Client.app"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
