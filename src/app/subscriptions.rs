@@ -16,7 +16,7 @@ const DOWNLOAD_REVISION: &str = "download";
 const SHOW_ALL_REVISIONS: &str = "all";
 const WATCHING_FOLDER: &str = "watching";
 
-const ARCHIVE_WINDOW: Duration = Duration::from_secs(15); // 15 minutes
+const ARCHIVE_WINDOW: Duration = Duration::from_secs(15*60); // 15 minutes
 const MAX_ARCHIVE_WINDOW: Duration = Duration::from_secs(3600 * 2);
 
 pub fn fs_watch_subscription(root: PathBuf) -> Subscription<Message> {
